@@ -7,6 +7,7 @@ Never define CODE_VERSION, RESEARCH_SCHEMA_VERSION, or ENGINE_PATCH_VERSION else
 CODE_VERSION = "research_fix_2026_06_17_v43"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v50_immediate_entry_candidate_snapshot"
+DATASET_EXPORTER_VERSION = "1.0.0"
 
 # Synthetic Flow Pressure Scale Contract
 # -100 to +100, 0 = neutral
