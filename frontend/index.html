@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Real-time BTC Options Analysis Dashboard powered by Bybit API" />
+  <title>BTC OPTIONS DASHBOARD</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Header -->
+  <header id="dashboard-header">
+    <div class="header-left">
+      <h1 id="header-title">₿ BTC OPTIONS DASHBOARD</h1>
+      <span id="header-subtitle" class="subtitle">BYBIT · REAL-TIME</span>
+    </div>
+    <div class="header-center">
+      <div id="spot-price-display" class="spot-block">
+        <span class="spot-label">BTC/USDT</span>
+        <span id="spot-price" class="spot-value">—</span>
+        <span id="spot-change" class="spot-change">—</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div id="status-indicator" class="status">
+        <span class="status-dot"></span>
+        <span id="status-text">Connecting...</span>
+      </div>
+      <div id="expiry-selector-wrap">
+        <label for="expiry-select">Expiry:</label>
+        <select id="expiry-select"></select>
+      </div>
+      <span id="last-update" class="update-time">—</span>
+    </div>
+  </header>
+
+  <!-- Top Navigation Bar -->
+  <nav id="navigation-bar">
+    <a href="#/" class="nav-tab active" data-page="dashboard"><span class="tab-icon">🖥️</span> ДАШБОРД</a>
+    <a href="#/heatmap" class="nav-tab" data-page="heatmap"><span class="tab-icon">🗺️</span> HEATMAP</a>
+    <a href="#/probability" class="nav-tab" data-page="probability"><span class="tab-icon">📊</span> PROBABILITY</a>
+    <a href="#/iv-term-structure" class="nav-tab" data-page="term_structure"><span class="tab-icon">📈</span> IV TERM</a>
+    <a href="#/gex" class="nav-tab" data-page="gex"><span class="tab-icon">🧲</span> GEX MAP</a>
+    <a href="#/skew" class="nav-tab" data-page="skew"><span class="tab-icon">📐</span> SKEW</a>
+    <a href="#/signals" class="nav-tab" data-page="signals"><span class="tab-icon">🔔</span> SIGNALS</a>
+    <a href="#/research" class="nav-tab" data-page="research"><span class="tab-icon">🔬</span> RESEARCH</a>
+    <a href="#/manual-trading" class="nav-tab" data-page="manual_trading"><span class="tab-icon">🎯</span> MOS MANUAL</a>
+    <a href="#/debug" class="nav-tab" data-page="debug"><span class="tab-icon">⚙️</span> DEBUG</a>
+    <a href="#/help" class="nav-tab" data-page="help"><span class="tab-icon">📖</span> СПРАВКА</a>
+  </nav>
+
+  <!-- App Page Container -->
+  <main id="app-container">
+    <!-- 1. MAIN DASHBOARD -->
+    <div id="page-dashboard" class="page-container active"></div>
+
+    <!-- 2. OPTIONS HEATMAP -->
+    <div id="page-heatmap" class="page-container"></div>
+
+    <!-- 3. PROBABILITY CURVE -->
+    <div id="page-probability" class="page-container"></div>
+
+    <!-- 4. IV TERM STRUCTURE -->
+    <div id="page-term_structure" class="page-container"></div>
+
+    <!-- 5. GAMMA EXPOSURE -->
+    <div id="page-gex" class="page-container"></div>
+
+    <!-- 6. SKEW ANALYTICS -->
+    <div id="page-skew" class="page-container"></div>
+
+    <!-- 7. SIGNALS & ALERTS -->
+    <div id="page-signals" class="page-container"></div>
+
+    <!-- 8. RESEARCH LABORATORY -->
+    <div id="page-research" class="page-container"></div>
+
+    <!-- 9. DEBUG / RAW DATA -->
+    <div id="page-debug" class="page-container"></div>
+
+    <!-- 10. MANUAL TRADING -->
+    <div id="page-manual_trading" class="page-container"></div>
+
+    <!-- 9. INSTITUTIONAL HELP CENTER -->
+    <div id="page-help" class="page-container"></div>
+  </main>
+
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
