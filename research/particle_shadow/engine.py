@@ -79,6 +79,72 @@ def _score_snapshot(
         default=0.0,
     )
 
+    contributions: dict[str, dict[str, Any]] = {}
+    for particle in particles:
+        particle_id = str(particle["particle_id"])
+        contributions[particle_id] = {
+            "particle_id": particle_id,
+            "component": "CONTRACT_METRIC_OBSERVATION"
+            if str(particle["particle_type"]).startswith("CONTRACT_")
+            else "STRUCTURAL_CONTEXT",
+            "evidence_role": "OBSERVATION_ONLY"
+            if str(particle["particle_type"]).startswith("CONTRACT_")
+            else "SUPPORTING",
+            "movement_contribution": 0.0,
+            "direction_contribution": 0.0,
+            "included_reason": "stored_for_v2_validation_not_used_by_v1_score"
+            if str(particle["particle_type"]).startswith("CONTRACT_")
+            else "structural_context",
+        }
+    if total_oi_delta > 0:
+        for particle in oi_particles:
+            item = contributions[str(particle["particle_id"])]
+            item.update(
+                component="OI_ACTIVITY",
+                evidence_role="SCORING",
+                movement_contribution=(
+                    0.25 * oi_activity
+                    * abs(float(particle["delta_value"])) / total_oi_delta
+                ),
+                included_reason="share_of_oi_activity_component",
+            )
+    if total_gex_delta > 0:
+        for particle in gex_particles:
+            item = contributions[str(particle["particle_id"])]
+            item.update(
+                component="GEX_ACTIVITY",
+                evidence_role="SCORING",
+                movement_contribution=(
+                    0.35 * gex_activity
+                    * abs(float(particle["delta_value"])) / total_gex_delta
+                ),
+                included_reason="share_of_gex_activity_component",
+            )
+    if term_particles:
+        strongest_term = max(
+            term_particles,
+            key=lambda p: (float(p["strength_score"]), str(p["particle_id"])),
+        )
+        item = contributions[str(strongest_term["particle_id"])]
+        item.update(
+            component="TERM_ACTIVITY",
+            evidence_role="SCORING",
+            movement_contribution=0.20 * term_activity,
+            included_reason="strongest_front_iv_particle",
+        )
+    if wall_particles:
+        strongest_wall = max(
+            wall_particles,
+            key=lambda p: (float(p["strength_score"]), str(p["particle_id"])),
+        )
+        item = contributions[str(strongest_wall["particle_id"])]
+        item.update(
+            component="WALL_ACTIVITY",
+            evidence_role="SCORING",
+            movement_contribution=0.20 * wall_activity,
+            included_reason="strongest_wall_or_flip_particle",
+        )
+
     negative_gamma_bonus = 10.0 if snapshot["gamma_regime"] == "NEGATIVE_GAMMA" else 0.0
     movement_score = clamp(
         0.25 * oi_activity
@@ -104,6 +170,13 @@ def _score_snapshot(
         if oi_denominator > 0
         else 0.0
     )
+    if oi_denominator > 0:
+        for particle in near_oi:
+            direction_sign = 1.0 if particle["side"] == "CALL" else -1.0
+            contributions[str(particle["particle_id"])]["direction_contribution"] = (
+                direction_sign * float(particle["delta_value"])
+                / oi_denominator * 15.0
+            )
     structural_direction = []
     spot = float(snapshot["spot_price"] or 0.0)
     for particle in wall_particles:
@@ -113,6 +186,7 @@ def _score_snapshot(
         if particle["particle_type"] == "GAMMA_FLIP_MIGRATION":
             contribution *= 1.2
         direction_score += contribution
+        contributions[str(particle["particle_id"])]["direction_contribution"] = contribution
         structural_direction.append(
             {
                 "particle_type": particle["particle_type"],
@@ -137,7 +211,9 @@ def _score_snapshot(
 
     structure_label = "NO_CLEAR_CONSTELLATION"
     reasons: list[str] = []
-    if expansion_probability >= 45.0 and movement_score < 40.0:
+    if not particles:
+        reasons.append("no_option_particles_for_constellation")
+    elif expansion_probability >= 45.0 and movement_score < 40.0:
         structure_label = "UNCONFIRMED_MOS_EXPANSION"
         reasons.append("mos_expansion_not_confirmed_by_option_particle_activity")
     elif snapshot["gamma_regime"] == "NEGATIVE_GAMMA" and movement_score >= 55.0:
@@ -188,6 +264,14 @@ def _score_snapshot(
             "put_wall_distance_pct": put_distance,
             "negative_gamma_bonus": negative_gamma_bonus,
         },
+        "particle_contributions": [
+            {
+                **item,
+                "movement_contribution": round(item["movement_contribution"], 6),
+                "direction_contribution": round(item["direction_contribution"], 6),
+            }
+            for item in contributions.values()
+        ],
     }
 
 
@@ -371,6 +455,28 @@ def build_constellations(
                 ),
             ),
         )
+        contribution_rows = [
+            (
+                constellation_id,
+                item["particle_id"],
+                item["component"],
+                item["evidence_role"],
+                item["movement_contribution"],
+                item["direction_contribution"],
+                item["included_reason"],
+            )
+            for item in scores["particle_contributions"]
+        ]
+        if contribution_rows:
+            connection.executemany(
+                """
+                INSERT INTO constellation_particle_links (
+                    constellation_id, particle_id, component, evidence_role,
+                    movement_contribution, direction_contribution, included_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                contribution_rows,
+            )
         constellation_count += 1
 
         candidate = _candidate_from_constellation(
@@ -401,6 +507,32 @@ def build_constellations(
             )
             """,
             candidate,
+        )
+        ranked_contributions = sorted(
+            scores["particle_contributions"],
+            key=lambda item: (
+                -abs(float(item["movement_contribution"])),
+                -abs(float(item["direction_contribution"])),
+                item["particle_id"],
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO candidate_particle_lineage (
+                candidate_id, particle_id, constellation_id, evidence_rank,
+                evidence_role, component, movement_contribution,
+                direction_contribution, included_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    candidate["candidate_id"], item["particle_id"],
+                    constellation_id, rank, item["evidence_role"],
+                    item["component"], item["movement_contribution"],
+                    item["direction_contribution"], item["included_reason"],
+                )
+                for rank, item in enumerate(ranked_contributions, start=1)
+            ],
         )
         candidate_count += 1
 

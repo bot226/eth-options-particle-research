@@ -439,7 +439,13 @@ async def get_diagnostics():
     """Return comprehensive runtime version, database health, and schema diagnostics."""
     import os
     from pathlib import Path
-    from engine.version import CODE_VERSION, RESEARCH_SCHEMA_VERSION, ENGINE_PATCH_VERSION, FLOW_PRESSURE_SCALE
+    from engine.version import (
+        CODE_VERSION,
+        RESEARCH_SCHEMA_VERSION,
+        ENGINE_PATCH_VERSION,
+        PARTICLE_LOGIC_VERSION,
+        FLOW_PRESSURE_SCALE,
+    )
     from engine.history_db import _DB_PATH as HISTORY_DB_PATH
     from engine.ohlcv_collector import OHLCV_ENABLED, OHLCV_EXCHANGE, OHLCV_SYMBOL, OHLCV_TIMEFRAME
     
@@ -604,6 +610,9 @@ async def get_diagnostics():
         "snapshots": 0,
         "oi_history_rows": 0,
         "oi_history_status": "unused_or_deprecated",
+        "option_contract_rows": 0,
+        "option_contract_latest_ts": None,
+        "option_contract_exchange_coverage": [],
     }
     try:
         import sqlite3
@@ -620,6 +629,38 @@ async def get_diagnostics():
             try:
                 hcursor.execute("SELECT COUNT(*) FROM oi_history")
                 history_db_info["oi_history_rows"] = hcursor.fetchone()[0]
+            except Exception:
+                pass
+            try:
+                hcursor.execute(
+                    "SELECT COUNT(*), MAX(ts) FROM option_contract_snapshots"
+                )
+                contract_row = hcursor.fetchone()
+                history_db_info["option_contract_rows"] = contract_row[0] or 0
+                history_db_info["option_contract_latest_ts"] = contract_row[1]
+                hcursor.execute(
+                    """
+                    SELECT exchange, COUNT(*) AS rows,
+                           SUM(mark_iv IS NOT NULL AND mark_iv > 0) AS valid_iv,
+                           SUM(volume_24h IS NOT NULL) AS valid_volume,
+                           SUM(delta IS NOT NULL AND gamma IS NOT NULL
+                               AND vega IS NOT NULL AND theta IS NOT NULL)
+                               AS valid_greeks
+                    FROM option_contract_snapshots
+                    GROUP BY exchange
+                    ORDER BY exchange
+                    """
+                )
+                history_db_info["option_contract_exchange_coverage"] = [
+                    {
+                        "exchange": row[0],
+                        "rows": row[1],
+                        "valid_iv": row[2],
+                        "valid_volume": row[3],
+                        "valid_greeks": row[4],
+                    }
+                    for row in hcursor.fetchall()
+                ]
             except Exception:
                 pass
             hconn.close()
@@ -642,6 +683,7 @@ async def get_diagnostics():
         "code_version": CODE_VERSION,
         "research_schema_version": RESEARCH_SCHEMA_VERSION,
         "engine_patch_version": ENGINE_PATCH_VERSION,
+        "particle_logic_version": PARTICLE_LOGIC_VERSION,
         "flow_pressure_scale": FLOW_PRESSURE_SCALE,
         "research_db_path": research_db,
         "history_db_path": history_db,

@@ -28,6 +28,25 @@ history.db-wal
 history.db-shm
 ```
 
+Particle Logic v2 adds the optional, backward-compatible table:
+
+```text
+option_contract_snapshots
+```
+
+New v2 collection runs should populate it every five minutes. Older archives
+without this table remain valid for v1-compatible replay.
+
+```sql
+SELECT exchange, COUNT(*) AS rows,
+       SUM(mark_iv IS NOT NULL AND mark_iv > 0) AS valid_iv,
+       SUM(volume_24h IS NOT NULL) AS valid_volume,
+       SUM(delta IS NOT NULL AND gamma IS NOT NULL
+           AND vega IS NOT NULL AND theta IS NOT NULL) AS valid_greeks
+FROM option_contract_snapshots
+GROUP BY exchange;
+```
+
 But for Research Layer, main requirement is `mos_research.db + wal + shm`.
 
 ## Required runtime version columns

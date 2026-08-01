@@ -127,6 +127,41 @@ def _persist(
     return count
 
 
+def _history_contracts(
+    connection: sqlite3.Connection,
+) -> dict[int, list[dict[str, Any]]]:
+    table_exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        ("option_contract_snapshots",),
+    ).fetchone()
+    if table_exists is None:
+        return {}
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in connection.execute(
+        """
+        SELECT snapshot_id, ts, exchange, contract_id, source_symbol,
+               expiry, strike, option_type, oi, volume_24h, mark_iv,
+               bid_iv, ask_iv, delta, gamma, vega, theta, mark_price,
+               underlying_price, exchange_sources_json
+        FROM option_contract_snapshots
+        ORDER BY snapshot_id, exchange, contract_id
+        """
+    ):
+        grouped.setdefault(int(row["snapshot_id"]), []).append(dict(row))
+    return grouped
+
+
+def _coverage(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> float | None:
+    if not rows:
+        return None
+    covered = sum(
+        1
+        for row in rows
+        if all(finite_float(row.get(field)) is not None for field in fields)
+    )
+    return round(covered / len(rows), 6)
+
+
 def extract_particles(
     history_db: str | Path,
     research_db: str | Path,
@@ -153,6 +188,7 @@ def extract_particles(
                 """
             )
         )
+        contracts_by_snapshot = _history_contracts(history)
     finally:
         history.close()
 
@@ -160,6 +196,8 @@ def extract_particles(
     persistence: dict[str, tuple[str, int, int]] = {}
     snapshot_count = 0
     particle_count = 0
+    contract_observation_count = 0
+    particle_contract_link_count = 0
 
     for row in rows:
         history_id = int(row["id"])
@@ -168,6 +206,7 @@ def extract_particles(
         gex = safe_json_loads(row["gex_json"], {})
         term = safe_json_loads(row["term_structure_json"], {})
         pdf = safe_json_loads(row["pdf_json"], {})
+        contract_rows = contracts_by_snapshot.get(history_id, [])
         context, context_lag = _nearest_prior_context(
             timestamp,
             research_timestamps,
@@ -207,6 +246,7 @@ def extract_particles(
             "history_gap_sec": history_gap,
             "chain_union_count": union_count,
             "chain_overlap_count": overlap_count,
+            "contract_metrics_available": bool(contract_rows),
         }
         output.execute(
             """
@@ -217,8 +257,11 @@ def extract_particles(
                 expansion_probability, synthetic_flow_pressure,
                 execution_timing_state, call_wall, put_wall, data_quality,
                 active_sources_json, exclude_from_analysis, exclude_reason,
-                chain_contract_count, chain_overlap_ratio, raw_context_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                chain_contract_count, chain_overlap_ratio,
+                contract_observation_count, contract_iv_coverage_ratio,
+                contract_volume_coverage_ratio, contract_greeks_coverage_ratio,
+                raw_context_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -245,9 +288,64 @@ def extract_particles(
                 ",".join(dict.fromkeys(exclude_reasons)),
                 len(oi) if isinstance(oi, dict) else 0,
                 overlap_ratio,
+                len(contract_rows),
+                _coverage(contract_rows, ("mark_iv",)),
+                _coverage(contract_rows, ("volume_24h",)),
+                _coverage(contract_rows, ("delta", "gamma", "vega", "theta")),
                 json.dumps(raw_context, sort_keys=True),
             ),
         )
+        contract_observation_ids: dict[tuple[str, str], str] = {}
+        contract_output_rows = []
+        for contract in contract_rows:
+            exchange = str(contract.get("exchange") or "unknown")
+            contract_id = str(contract.get("contract_id") or "")
+            observation_id = stable_id(
+                run_id, history_id, exchange, contract_id, "contract_observation"
+            )
+            contract_observation_ids[(exchange, contract_id)] = observation_id
+            numeric_fields = (
+                "oi", "volume_24h", "mark_iv", "bid_iv", "ask_iv", "delta",
+                "gamma", "vega", "theta", "mark_price", "underlying_price",
+            )
+            fields_present = [
+                field for field in numeric_fields
+                if finite_float(contract.get(field)) is not None
+            ]
+            contract_output_rows.append(
+                (
+                    observation_id, run_id, history_id, timestamp, exchange,
+                    contract_id, contract.get("source_symbol"), contract.get("expiry"),
+                    finite_float(contract.get("strike")), contract.get("option_type"),
+                    finite_float(contract.get("oi")),
+                    finite_float(contract.get("volume_24h")),
+                    finite_float(contract.get("mark_iv")),
+                    finite_float(contract.get("bid_iv")),
+                    finite_float(contract.get("ask_iv")),
+                    finite_float(contract.get("delta")),
+                    finite_float(contract.get("gamma")),
+                    finite_float(contract.get("vega")),
+                    finite_float(contract.get("theta")),
+                    finite_float(contract.get("mark_price")),
+                    finite_float(contract.get("underlying_price")),
+                    contract.get("exchange_sources_json") or "[]",
+                    json.dumps(fields_present, sort_keys=True),
+                )
+            )
+        if contract_output_rows:
+            output.executemany(
+                """
+                INSERT INTO contract_observations (
+                    contract_observation_id, run_id, history_snapshot_id,
+                    timestamp_utc, exchange, contract_id, source_symbol, expiry,
+                    strike, option_type, oi, volume_24h, mark_iv, bid_iv, ask_iv,
+                    delta, gamma, vega, theta, mark_price, underlying_price,
+                    exchange_sources_json, fields_present_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                contract_output_rows,
+            )
+            contract_observation_count += len(contract_output_rows)
         snapshot_count += 1
 
         can_compare = (
@@ -264,11 +362,16 @@ def extract_particles(
                 "oi": oi if isinstance(oi, dict) else {},
                 "gex": gex if isinstance(gex, dict) else {},
                 "term": term if isinstance(term, dict) else {},
+                "contracts": {
+                    (str(item.get("exchange")), str(item.get("contract_id"))): item
+                    for item in contract_rows
+                },
                 "excluded": bool(exclude_reasons),
             }
             continue
 
         particle_rows: list[tuple[Any, ...]] = []
+        particle_contract_links: list[tuple[str, str, str, str]] = []
 
         oi_changes: list[tuple[str, float, float, float]] = []
         for instrument in sorted(set(oi) & set(previous_oi)):
@@ -294,9 +397,10 @@ def extract_particles(
             )
             key = f"OI:{instrument}"
             strength = percentile_strength(delta, oi_population)
+            particle_id = stable_id(run_id, history_id, key, particle_type)
             particle_rows.append(
                 (
-                    stable_id(run_id, history_id, key, particle_type), run_id,
+                    particle_id, run_id,
                     history_id, timestamp, particle_type, identity.option_type,
                     identity.expiry, identity.strike,
                     "CALL" if identity.option_type == "C" else "PUT", key,
@@ -306,6 +410,11 @@ def extract_particles(
                     json.dumps({"instrument": instrument}, sort_keys=True),
                 )
             )
+            for (exchange, contract_id), observation_id in contract_observation_ids.items():
+                if contract_id == instrument:
+                    particle_contract_links.append(
+                        (particle_id, observation_id, "SOURCE_CONTRACT", "oi")
+                    )
 
         previous_gex = _gex_by_strike(previous["gex"])
         current_gex = _gex_by_strike(gex)
@@ -398,6 +507,86 @@ def extract_particles(
                     )
                 )
 
+        previous_contracts = previous.get("contracts", {})
+        current_contracts = {
+            (str(item.get("exchange")), str(item.get("contract_id"))): item
+            for item in contract_rows
+        }
+        contract_metric_specs = (
+            ("mark_iv", "CONTRACT_IV_RISE", "CONTRACT_IV_FALL", "signed"),
+            ("volume_24h", "CONTRACT_VOLUME_RISE", "CONTRACT_VOLUME_FALL", "signed"),
+            ("delta", "CONTRACT_DELTA_UP", "CONTRACT_DELTA_DOWN", "signed"),
+            ("gamma", "CONTRACT_GAMMA_BUILD", "CONTRACT_GAMMA_DECAY", "magnitude"),
+            ("vega", "CONTRACT_VEGA_BUILD", "CONTRACT_VEGA_DECAY", "magnitude"),
+            ("theta", "CONTRACT_THETA_BUILD", "CONTRACT_THETA_DECAY", "magnitude"),
+        )
+        common_contracts = sorted(set(previous_contracts) & set(current_contracts))
+        for metric, rise_type, fall_type, comparison_mode in contract_metric_specs:
+            metric_changes = []
+            for contract_key in common_contracts:
+                previous_contract = previous_contracts[contract_key]
+                current_contract = current_contracts[contract_key]
+                previous_value = finite_float(previous_contract.get(metric))
+                current_value = finite_float(current_contract.get(metric))
+                if previous_value is None or current_value is None:
+                    continue
+                if metric == "mark_iv" and (previous_value <= 0 or current_value <= 0):
+                    continue
+                comparison_delta = (
+                    abs(current_value) - abs(previous_value)
+                    if comparison_mode == "magnitude"
+                    else current_value - previous_value
+                )
+                if abs(comparison_delta) <= 1e-12:
+                    continue
+                metric_changes.append(
+                    (contract_key, previous_value, current_value, comparison_delta)
+                )
+            population = [change[3] for change in metric_changes]
+            for contract_key, previous_value, current_value, delta in metric_changes:
+                exchange, contract_id = contract_key
+                contract = current_contracts[contract_key]
+                option_type = str(contract.get("option_type") or "")
+                particle_type = rise_type if delta > 0 else fall_type
+                source_key = f"CONTRACT:{exchange}:{contract_id}:{metric}"
+                particle_id = stable_id(
+                    run_id, history_id, source_key, particle_type
+                )
+                strike = finite_float(contract.get("strike"))
+                distance = (
+                    (strike - spot) / spot * 100.0
+                    if strike is not None and spot is not None and spot > 0
+                    else None
+                )
+                particle_rows.append(
+                    (
+                        particle_id, run_id, history_id, timestamp, particle_type,
+                        option_type if option_type in {"C", "P"} else None,
+                        contract.get("expiry"), strike,
+                        {"C": "CALL", "P": "PUT"}.get(option_type, "UNKNOWN"),
+                        source_key, previous_value, current_value, delta,
+                        delta / abs(previous_value) if abs(previous_value) > 1e-12 else None,
+                        percentile_strength(delta, population), distance,
+                        _persist(persistence, source_key, particle_type, history_id),
+                        source_quality,
+                        json.dumps(
+                            {
+                                "contract_id": contract_id,
+                                "exchange": exchange,
+                                "metric": metric,
+                                "comparison_mode": comparison_mode,
+                                "scoring_role": "observation_only_v2",
+                            },
+                            sort_keys=True,
+                        ),
+                    )
+                )
+                observation_id = contract_observation_ids.get(contract_key)
+                if observation_id:
+                    particle_contract_links.append(
+                        (particle_id, observation_id, "DIRECT_METRIC", metric)
+                    )
+
         if particle_rows:
             output.executemany(
                 """
@@ -412,6 +601,16 @@ def extract_particles(
                 particle_rows,
             )
             particle_count += len(particle_rows)
+        if particle_contract_links:
+            output.executemany(
+                """
+                INSERT INTO particle_contract_links (
+                    particle_id, contract_observation_id, link_role, metric_name
+                ) VALUES (?, ?, ?, ?)
+                """,
+                particle_contract_links,
+            )
+            particle_contract_link_count += len(particle_contract_links)
 
         previous = {
             "history_id": history_id,
@@ -419,8 +618,14 @@ def extract_particles(
             "oi": oi,
             "gex": gex,
             "term": term,
+            "contracts": current_contracts,
             "excluded": bool(exclude_reasons),
         }
 
     output.commit()
-    return {"source_snapshots": snapshot_count, "particles": particle_count}
+    return {
+        "source_snapshots": snapshot_count,
+        "contract_observations": contract_observation_count,
+        "particles": particle_count,
+        "particle_contract_links": particle_contract_link_count,
+    }

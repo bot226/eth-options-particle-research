@@ -1,16 +1,16 @@
 # MOS_NEXT_TASK.md
 
-## Task: v51 Particle Logic Shadow Replay v1
+## Task: validate v52 Particle Contract Lineage v2 collection
 
 ## Goal
 
-Build an options-particle-first research layer from existing MOS databases while
-keeping clean MOS behavior unchanged.
+Collect and validate source-level option contract metrics while keeping clean
+MOS behavior and all live formulas unchanged.
 
 ## Inputs
 
 ```text
-history.db       per-contract OI, GEX by strike, term structure
+history.db       structural snapshots plus option_contract_snapshots
 mos_research.db  MOS context, 1m OHLCV, future context
 manifest.json    dataset provenance
 ```
@@ -19,7 +19,7 @@ All input databases must be opened read-only.
 
 ## Output
 
-One standalone `particle_shadow_v1.db` containing:
+One standalone `particle_shadow_v2.db` containing the v1 tables plus:
 
 ```text
 shadow_runs
@@ -28,15 +28,18 @@ particle_observations
 particle_constellations
 shadow_candidates
 shadow_outcomes
+contract_observations
+particle_contract_links
+constellation_particle_links
+candidate_particle_lineage
 ```
 
-## Particle families
+## New observation-only particle families
 
-- `OI_BUILD`, `OI_UNWIND` per contract;
-- `GEX_BUILD`, `GEX_DECAY`, `GEX_SIGN_FLIP` per strike/component;
-- `CALL_WALL_MIGRATION`, `PUT_WALL_MIGRATION`;
-- `GAMMA_FLIP_MIGRATION`;
-- `FRONT_IV_RISE`, `FRONT_IV_FALL`.
+- contract IV rise/fall;
+- contract rolling-volume rise/fall;
+- contract delta up/down;
+- contract gamma, vega, and theta magnitude build/decay.
 
 ## Logic contract
 
@@ -46,6 +49,8 @@ shadow_outcomes
 - every score and blocker is stored;
 - no look-ahead is allowed when generating a constellation or candidate;
 - future OHLCV is used only by `shadow_outcomes` after the candidate exists.
+- contract-metric particles remain observation-only until validated;
+- candidates without option-particle lineage are forbidden.
 
 ## Forbidden
 
@@ -68,4 +73,7 @@ Do not modify or feed:
 - replay is deterministic for the same database hashes and logic version;
 - excluded/stale source snapshots do not generate particles;
 - all shadow candidates have an explainable constellation and blockers;
+- all shadow candidates have at least one `candidate_particle_lineage` row;
+- new collector snapshots contain per-contract IV, volume, and Greeks coverage;
+- v1 archives without contract rows still replay successfully;
 - 60/120/240-minute outcomes are stored when OHLCV coverage permits.

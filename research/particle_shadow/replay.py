@@ -97,22 +97,41 @@ def open_dataset(source: str | Path) -> Iterator[tuple[Path, dict[str, Any]]]:
 
 
 def _summary(connection: sqlite3.Connection, run_id: str) -> dict[str, Any]:
-    counts = {}
-    for table in (
-        "source_snapshots",
-        "particle_observations",
-        "particle_constellations",
-        "shadow_candidates",
-        "shadow_outcomes",
-    ):
-        counts[table] = int(
-            connection.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE "
-                + ("run_id = ?" if table != "shadow_outcomes" else
-                   "candidate_id IN (SELECT candidate_id FROM shadow_candidates WHERE run_id = ?)"),
-                (run_id,),
-            ).fetchone()[0]
-        )
+    count_queries = {
+        "source_snapshots": "SELECT COUNT(*) FROM source_snapshots WHERE run_id = ?",
+        "contract_observations": "SELECT COUNT(*) FROM contract_observations WHERE run_id = ?",
+        "particle_observations": "SELECT COUNT(*) FROM particle_observations WHERE run_id = ?",
+        "particle_contract_links": """
+            SELECT COUNT(*) FROM particle_contract_links
+            WHERE particle_id IN (
+                SELECT particle_id FROM particle_observations WHERE run_id = ?
+            )
+        """,
+        "particle_constellations": "SELECT COUNT(*) FROM particle_constellations WHERE run_id = ?",
+        "constellation_particle_links": """
+            SELECT COUNT(*) FROM constellation_particle_links
+            WHERE constellation_id IN (
+                SELECT constellation_id FROM particle_constellations WHERE run_id = ?
+            )
+        """,
+        "shadow_candidates": "SELECT COUNT(*) FROM shadow_candidates WHERE run_id = ?",
+        "candidate_particle_lineage": """
+            SELECT COUNT(*) FROM candidate_particle_lineage
+            WHERE candidate_id IN (
+                SELECT candidate_id FROM shadow_candidates WHERE run_id = ?
+            )
+        """,
+        "shadow_outcomes": """
+            SELECT COUNT(*) FROM shadow_outcomes
+            WHERE candidate_id IN (
+                SELECT candidate_id FROM shadow_candidates WHERE run_id = ?
+            )
+        """,
+    }
+    counts = {
+        name: int(connection.execute(query, (run_id,)).fetchone()[0])
+        for name, query in count_queries.items()
+    }
     return {
         "run_id": run_id,
         "logic_version": PARTICLE_LOGIC_VERSION,
@@ -131,6 +150,21 @@ def _summary(connection: sqlite3.Connection, run_id: str) -> dict[str, Any]:
                 (run_id,),
             )
         ],
+        "contract_coverage": dict(
+            connection.execute(
+                """
+                SELECT COUNT(*) AS snapshots,
+                       SUM(contract_observation_count > 0) AS snapshots_with_contracts,
+                       SUM(contract_observation_count) AS contract_rows,
+                       ROUND(AVG(contract_iv_coverage_ratio), 6) AS avg_iv_coverage,
+                       ROUND(AVG(contract_volume_coverage_ratio), 6) AS avg_volume_coverage,
+                       ROUND(AVG(contract_greeks_coverage_ratio), 6) AS avg_greeks_coverage
+                FROM source_snapshots
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        ),
         "particle_types": [
             dict(row)
             for row in connection.execute(
@@ -207,6 +241,25 @@ def _summary(connection: sqlite3.Connection, run_id: str) -> dict[str, Any]:
                 WHERE c.run_id = ? AND c.candidate_is_new = 1
                 GROUP BY c.candidate_status, c.setup_family, c.direction
                 ORDER BY episodes DESC, c.candidate_status, c.setup_family, c.direction
+                """,
+                (run_id,),
+            )
+        ],
+        "candidate_lineage": [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT l.evidence_role, l.component, COUNT(*) AS links,
+                       COUNT(DISTINCT l.candidate_id) AS candidates,
+                       ROUND(AVG(ABS(l.movement_contribution)), 6)
+                           AS avg_abs_movement_contribution,
+                       ROUND(AVG(ABS(l.direction_contribution)), 6)
+                           AS avg_abs_direction_contribution
+                FROM candidate_particle_lineage l
+                JOIN shadow_candidates c USING (candidate_id)
+                WHERE c.run_id = ?
+                GROUP BY l.evidence_role, l.component
+                ORDER BY links DESC, l.evidence_role, l.component
                 """,
                 (run_id,),
             )

@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from backend.engine.history_db import HistoryDB
 from research.particle_shadow.common import parse_contract
 from research.particle_shadow.replay import ParticleReplayError, run_replay
 
@@ -42,6 +43,32 @@ class ParticleShadowReplayTest(unittest.TestCase):
                     gex_json TEXT,
                     term_structure_json TEXT,
                     exchange_data_json TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE option_contract_snapshots (
+                    snapshot_id INTEGER NOT NULL,
+                    ts REAL NOT NULL,
+                    exchange TEXT NOT NULL,
+                    contract_id TEXT NOT NULL,
+                    source_symbol TEXT,
+                    expiry TEXT,
+                    strike REAL,
+                    option_type TEXT,
+                    oi REAL,
+                    volume_24h REAL,
+                    mark_iv REAL,
+                    bid_iv REAL,
+                    ask_iv REAL,
+                    delta REAL,
+                    gamma REAL,
+                    vega REAL,
+                    theta REAL,
+                    mark_price REAL,
+                    underlying_price REAL,
+                    exchange_sources_json TEXT
                 )
                 """
             )
@@ -84,6 +111,27 @@ class ParticleShadowReplayTest(unittest.TestCase):
                     "INSERT INTO snapshots VALUES (?, ?, ?, '{}', ?, ?, '{}')",
                     (index, timestamp, json.dumps(oi), json.dumps(gex), json.dumps(term)),
                 )
+                for contract_id, strike, option_type, contract_oi in (
+                    ("BTC-20260814-100-C", 100.0, "C", call_oi),
+                    ("BTC-20260814-90-P", 90.0, "P", put_oi),
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO option_contract_snapshots VALUES (
+                            ?, ?, 'bybit', ?, ?, '20260814', ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, '["bybit"]'
+                        )
+                        """,
+                        (
+                            index, timestamp, contract_id, contract_id, strike,
+                            option_type, contract_oi, 10.0 + index,
+                            0.30 + index * 0.002, 0.29 + index * 0.002,
+                            0.31 + index * 0.002,
+                            (0.50 if option_type == "C" else -0.50) + index * 0.01,
+                            0.01 + index * 0.001, 0.20 + index * 0.01,
+                            -0.10 - index * 0.01, 0.02, 100.0,
+                        ),
+                    )
             connection.commit()
         finally:
             connection.close()
@@ -183,7 +231,9 @@ class ParticleShadowReplayTest(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertEqual(output_path, output.resolve())
         self.assertEqual(summary["counts"]["source_snapshots"], 4)
+        self.assertEqual(summary["counts"]["contract_observations"], 8)
         self.assertGreater(summary["counts"]["particle_observations"], 0)
+        self.assertGreater(summary["counts"]["particle_contract_links"], 0)
         self.assertGreater(summary["counts"]["particle_constellations"], 0)
         self.assertGreater(summary["counts"]["shadow_candidates"], 0)
         self.assertTrue(output.with_suffix(".summary.json").is_file())
@@ -221,6 +271,31 @@ class ParticleShadowReplayTest(unittest.TestCase):
                 ).fetchone()[0],
                 0,
             )
+            self.assertGreater(
+                connection.execute(
+                    "SELECT COUNT(*) FROM particle_observations "
+                    "WHERE particle_type LIKE 'CONTRACT_%'"
+                ).fetchone()[0],
+                0,
+            )
+            self.assertGreater(
+                connection.execute(
+                    "SELECT COUNT(*) FROM candidate_particle_lineage"
+                ).fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) FROM shadow_candidates c
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM candidate_particle_lineage l
+                        WHERE l.candidate_id = c.candidate_id
+                    )
+                    """
+                ).fetchone()[0],
+                0,
+            )
             candidate_rows = connection.execute(
                 "SELECT COUNT(*), COUNT(DISTINCT candidate_key), SUM(candidate_is_new) "
                 "FROM shadow_candidates"
@@ -233,6 +308,62 @@ class ParticleShadowReplayTest(unittest.TestCase):
 
         with self.assertRaises(ParticleReplayError):
             run_replay(self.dataset, output)
+
+    def test_replay_remains_compatible_with_v1_archives_without_contract_table(self):
+        connection = sqlite3.connect(self.history_db)
+        try:
+            connection.execute("DROP TABLE option_contract_snapshots")
+            connection.commit()
+        finally:
+            connection.close()
+        output = self.root / "legacy_particle_shadow.db"
+        _, summary = run_replay(self.dataset, output)
+        self.assertEqual(summary["counts"]["contract_observations"], 0)
+        self.assertEqual(summary["counts"]["particle_contract_links"], 0)
+
+
+class HistoryContractSnapshotTest(unittest.TestCase):
+    def test_history_db_persists_contract_metrics_atomically(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        db_path = Path(temporary.name) / "data" / "history.db"
+        history = HistoryDB(str(db_path))
+        self.addCleanup(history.close)
+        snapshot_id = history.save_snapshot(
+            ts=1_000.0,
+            oi_data={"BTC-20260814-100-C": 12.0},
+            contract_data={
+                "BTC-20260814-100-C": {
+                    "symbol": "BTC-20260814-100-C",
+                    "expiry": "20260814",
+                    "strike": 100,
+                    "type": "C",
+                    "oi": 12,
+                    "volume": 7,
+                    "markIv": 0.31,
+                    "bidIv": 0.30,
+                    "askIv": 0.32,
+                    "delta": 0.51,
+                    "gamma": 0.01,
+                    "vega": 0.20,
+                    "theta": -0.10,
+                }
+            },
+        )
+        self.assertIsNotNone(snapshot_id)
+        connection = sqlite3.connect(db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT exchange, contract_id, oi, volume_24h, mark_iv,
+                       delta, gamma, vega, theta
+                FROM option_contract_snapshots
+                """
+            ).fetchone()
+            self.assertEqual(row[:2], ("bybit", "BTC-20260814-100-C"))
+            self.assertEqual(row[2:], (12.0, 7.0, 0.31, 0.51, 0.01, 0.2, -0.1))
+        finally:
+            connection.close()
 
 
 if __name__ == "__main__":

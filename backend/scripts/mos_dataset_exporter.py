@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-EXPORTER_VERSION = "1.0.0"
-MANIFEST_VERSION = "1.0"
+EXPORTER_VERSION = "1.1.0"
+MANIFEST_VERSION = "1.1"
 REQUIRED_DATABASES = (
     "mos_research.db",
     "mos_manual.db",
@@ -58,6 +58,7 @@ TIME_COLUMNS: dict[str, dict[str, str]] = {
     "history.db": {
         "snapshots": "ts",
         "oi_history": "ts",
+        "option_contract_snapshots": "ts",
     },
 }
 

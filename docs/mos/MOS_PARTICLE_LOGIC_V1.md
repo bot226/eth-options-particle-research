@@ -115,14 +115,10 @@ JOIN shadow_outcomes o USING (candidate_id)
 GROUP BY c.setup_family, c.direction;
 ```
 
-## Additional collection needed for v2
+## Implemented in v2
 
-Keep the existing MOS option collector. Extend persistence, rather than adding
-a competing collector, with per-contract mark/bid/ask price, mark/bid/ask IV,
-delta, gamma, vega, theta, volume/turnover, forward price, source timestamp,
-and latency. Use one-minute storage near spot and immediate full-chain snapshots
-when MOS emits an event or manual candidate.
-
-Also preserve exact lineage from manual candidate to research snapshot, event,
-reaction, and the candles used for confirmation. These additions improve audit
-quality and do not need to alter live decision formulas.
+Per-contract IV, volume, Greeks, source exchange, and exact particle-to-candidate
+lineage are implemented by Particle Logic v2. See `MOS_PARTICLE_LOGIC_V2.md`.
+The five-minute collection interval is retained for the first clean baseline;
+faster near-spot sampling should be considered only after storage growth and
+coverage are measured on the collector computer.

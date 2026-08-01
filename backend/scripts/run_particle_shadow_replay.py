@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from research.particle_shadow.replay import ParticleReplayError, run_replay
+from backend.engine.version import PARTICLE_LOGIC_VERSION
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         type=Path,
-        help="Output .db path (default: <dataset>_particle_shadow_v1.db)",
+        help=f"Output .db path (default: <dataset>_{PARTICLE_LOGIC_VERSION}.db)",
     )
     parser.add_argument(
         "--replace",
@@ -41,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     output = args.output
     if output is None:
         stem = args.dataset.stem if args.dataset.suffix else args.dataset.name
-        output = args.dataset.parent / f"{stem}_particle_shadow_v1.db"
+        output = args.dataset.parent / f"{stem}_{PARTICLE_LOGIC_VERSION}.db"
     try:
         output_path, summary = run_replay(
             args.dataset,

@@ -8,6 +8,7 @@ Supports automatic migration from legacy history.json on first launch.
 import os
 import json
 import time
+import math
 import sqlite3
 import logging
 from typing import Optional
@@ -32,6 +33,7 @@ class HistoryDB:
     def _init_db(self):
         """Create tables if they don't exist."""
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
 
@@ -56,6 +58,35 @@ class HistoryDB:
             );
             CREATE INDEX IF NOT EXISTS idx_oi_ts ON oi_history(ts);
             CREATE INDEX IF NOT EXISTS idx_oi_symbol ON oi_history(symbol);
+
+            CREATE TABLE IF NOT EXISTS option_contract_snapshots (
+                snapshot_id INTEGER NOT NULL,
+                ts REAL NOT NULL,
+                exchange TEXT NOT NULL,
+                contract_id TEXT NOT NULL,
+                source_symbol TEXT,
+                expiry TEXT,
+                strike REAL,
+                option_type TEXT,
+                oi REAL,
+                volume_24h REAL,
+                mark_iv REAL,
+                bid_iv REAL,
+                ask_iv REAL,
+                delta REAL,
+                gamma REAL,
+                vega REAL,
+                theta REAL,
+                mark_price REAL,
+                underlying_price REAL,
+                exchange_sources_json TEXT NOT NULL DEFAULT '[]',
+                PRIMARY KEY (snapshot_id, exchange, contract_id),
+                FOREIGN KEY (snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_contract_snapshots_ts
+                ON option_contract_snapshots(ts);
+            CREATE INDEX IF NOT EXISTS idx_contract_snapshots_contract
+                ON option_contract_snapshots(exchange, contract_id, ts);
         """)
         self._conn.commit()
         log.info("HistoryDB initialized at %s", self.db_path)
@@ -112,12 +143,76 @@ class HistoryDB:
 
     # ── Snapshot operations ──────────────────────────────────────────
 
+    @staticmethod
+    def _finite_or_none(value):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if math.isfinite(parsed) else None
+
+    @classmethod
+    def _contract_rows(cls, snapshot_id: int, ts: float, contract_data) -> list[tuple]:
+        """Normalize exchange contract observations for additive research storage."""
+        if not contract_data:
+            return []
+        items = contract_data.items() if isinstance(contract_data, dict) else enumerate(contract_data)
+        rows = []
+        seen = set()
+        for key, ticker in items:
+            if not isinstance(ticker, dict):
+                continue
+            contract_id = str(
+                ticker.get("canonical_id") or ticker.get("symbol") or key or ""
+            ).strip()
+            if not contract_id:
+                continue
+            exchange = str(ticker.get("exchange") or "bybit").strip().lower()
+            unique_key = (exchange, contract_id)
+            if unique_key in seen:
+                continue
+            seen.add(unique_key)
+            option_type = str(ticker.get("type") or "").upper()
+            option_type = {"CALL": "C", "PUT": "P"}.get(option_type, option_type)
+            if option_type not in {"C", "P"}:
+                option_type = None
+            sources = ticker.get("exchange_sources")
+            if not isinstance(sources, list):
+                sources = [exchange] if exchange else []
+            rows.append(
+                (
+                    snapshot_id,
+                    ts,
+                    exchange,
+                    contract_id,
+                    ticker.get("symbol"),
+                    ticker.get("expiry"),
+                    cls._finite_or_none(ticker.get("strike")),
+                    option_type,
+                    cls._finite_or_none(ticker.get("oi")),
+                    cls._finite_or_none(ticker.get("volume", ticker.get("volume_24h"))),
+                    cls._finite_or_none(ticker.get("markIv", ticker.get("mark_iv"))),
+                    cls._finite_or_none(ticker.get("bidIv", ticker.get("bid_iv"))),
+                    cls._finite_or_none(ticker.get("askIv", ticker.get("ask_iv"))),
+                    cls._finite_or_none(ticker.get("delta")),
+                    cls._finite_or_none(ticker.get("gamma")),
+                    cls._finite_or_none(ticker.get("vega")),
+                    cls._finite_or_none(ticker.get("theta")),
+                    cls._finite_or_none(ticker.get("markPrice", ticker.get("mark_price"))),
+                    cls._finite_or_none(
+                        ticker.get("underlyingPrice", ticker.get("underlying_price"))
+                    ),
+                    json.dumps(sorted(set(str(source) for source in sources))),
+                )
+            )
+        return rows
+
     def save_snapshot(self, ts: float, oi_data: dict, pdf_data: dict = None,
                       gex_data: dict = None, term_data: dict = None,
-                      exchange_data: dict = None):
-        """Save a data snapshot."""
+                      exchange_data: dict = None, contract_data=None):
+        """Save one structural snapshot and its optional per-contract observations."""
         try:
-            self._conn.execute(
+            cursor = self._conn.execute(
                 """INSERT INTO snapshots
                    (ts, oi_json, pdf_json, gex_json, term_structure_json, exchange_data_json)
                    VALUES (?, ?, ?, ?, ?, ?)""",
@@ -130,9 +225,26 @@ class HistoryDB:
                     json.dumps(exchange_data) if exchange_data else "{}",
                 )
             )
+            snapshot_id = int(cursor.lastrowid)
+            contract_rows = self._contract_rows(snapshot_id, ts, contract_data)
+            if contract_rows:
+                self._conn.executemany(
+                    """
+                    INSERT INTO option_contract_snapshots (
+                        snapshot_id, ts, exchange, contract_id, source_symbol,
+                        expiry, strike, option_type, oi, volume_24h, mark_iv,
+                        bid_iv, ask_iv, delta, gamma, vega, theta, mark_price,
+                        underlying_price, exchange_sources_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    contract_rows,
+                )
             self._conn.commit()
+            return snapshot_id
         except Exception as e:
+            self._conn.rollback()
             log.error("Failed to save snapshot: %s", e)
+            return None
 
     def get_snapshot_at(self, target_ts: float) -> Optional[dict]:
         """Get nearest snapshot to target timestamp."""

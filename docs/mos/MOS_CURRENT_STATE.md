@@ -5,10 +5,10 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_01_v44"
+CODE_VERSION = "research_fix_2026_08_01_v45"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v51_particle_shadow_replay_v1"
-PARTICLE_LOGIC_VERSION = "particle_shadow_v1"
+ENGINE_PATCH_VERSION = "v52_particle_contract_lineage_v2"
+PARTICLE_LOGIC_VERSION = "particle_shadow_v2"
 ```
 
 The last collected clean-MOS baseline remains on `research_fix_2026_06_17_v43`
@@ -24,6 +24,18 @@ is an offline shadow layer and is not connected to live MOS decisions.
 - writes a standalone `particle_shadow.db`;
 - records shadow watches/candidates and 5/15/30/60/120/240-minute outcomes;
 - does not modify live databases, State Machine, execution, events, or manual trading.
+
+## Particle Logic shadow v2
+
+- adds source-level `option_contract_snapshots` to `history.db` without changing
+  the existing structural snapshot schema;
+- persists per-contract IV, 24-hour volume, delta, gamma, vega, and theta;
+- copies contract observations into the standalone replay database;
+- links contract observations to particles and every candidate to its complete,
+  ranked particle lineage;
+- keeps new contract-metric particles observation-only until walk-forward
+  validation supports scoring weights;
+- remains backward-compatible with v1 MOS archives.
 
 ## Latest validated v20 database
 
@@ -99,14 +111,7 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Add:
-
-```text
-experimental short_term_flow_pressure
-```
-
-as READ-ONLY debug layer.
-
-It must NOT affect current_state, execution_timing_state, signal_cluster_score, expansion_probability, event generation, FLOW_SURGE or trading logic.
-
-Purpose: compare legacy synthetic_flow_pressure vs short-term OHLCV-based flow.
+Run v45 on the collector without changing thresholds. After at least 24 hours,
+export a new dataset and verify contract-row continuity, IV/volume/Greeks
+coverage, database growth, and complete candidate lineage. Do not promote the
+new contract particles into scoring until several regimes are represented.

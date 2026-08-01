@@ -327,6 +327,7 @@ class DataManager:
                 pdf_data=snapshot_pdf,
                 gex_data=snapshot_gex,
                 term_data=snapshot_ts,
+                contract_data=self.tickers,
             )
             
             self.oi_history.append({

@@ -442,6 +442,16 @@ class MultiExchangeDataManager:
                     dict(self.chain), self.spot_price
                 )
             snapshot_ts = Calculator.get_iv_term_structure(self.chain, self.spot_price)
+
+            # Persist source-level observations.  The existing aggregate chain remains
+            # untouched; replay can reconstruct exactly which exchange supplied each
+            # contract's IV, volume, and Greeks.
+            contract_observations = []
+            for exchange, tickers in self.per_exchange_tickers.items():
+                for ticker in tickers:
+                    observation = dict(ticker)
+                    observation.setdefault("exchange", exchange)
+                    contract_observations.append(observation)
             
             # Save to SQLite
             self.history_db.save_snapshot(
@@ -450,6 +460,7 @@ class MultiExchangeDataManager:
                 pdf_data=snapshot_pdf,
                 gex_data=snapshot_gex,
                 term_data=snapshot_ts,
+                contract_data=contract_observations,
             )
             
             self.oi_history.append({

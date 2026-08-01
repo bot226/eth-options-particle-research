@@ -68,6 +68,10 @@ python backend/scripts/mos_dataset_exporter.py `
 - time ranges for key tables;
 - runtime version groups already stored in the databases.
 
+Exporter v1.1 also records the row count and time range of
+`history.db.option_contract_snapshots` when Particle Logic v2 collection is
+active. The contract table is included automatically as part of `history.db`.
+
 On Particle Logic branches the manifest also records
 `particle_logic_version`; the shadow replay itself remains outside the live
 database archive.

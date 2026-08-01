@@ -13,7 +13,7 @@ from pathlib import Path
 
 from backend.engine.version import PARTICLE_LOGIC_VERSION
 
-PARTICLE_SHADOW_SCHEMA_VERSION = "particle_shadow_schema_v1"
+PARTICLE_SHADOW_SCHEMA_VERSION = "particle_shadow_schema_v2"
 
 
 SCHEMA_SQL = """
@@ -64,8 +64,40 @@ CREATE TABLE IF NOT EXISTS source_snapshots (
     exclude_reason TEXT,
     chain_contract_count INTEGER NOT NULL DEFAULT 0,
     chain_overlap_ratio REAL,
+    contract_observation_count INTEGER NOT NULL DEFAULT 0,
+    contract_iv_coverage_ratio REAL,
+    contract_volume_coverage_ratio REAL,
+    contract_greeks_coverage_ratio REAL,
     raw_context_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (run_id, history_snapshot_id)
+);
+
+CREATE TABLE IF NOT EXISTS contract_observations (
+    contract_observation_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    history_snapshot_id INTEGER NOT NULL,
+    timestamp_utc REAL NOT NULL,
+    exchange TEXT NOT NULL,
+    contract_id TEXT NOT NULL,
+    source_symbol TEXT,
+    expiry TEXT,
+    strike REAL,
+    option_type TEXT,
+    oi REAL,
+    volume_24h REAL,
+    mark_iv REAL,
+    bid_iv REAL,
+    ask_iv REAL,
+    delta REAL,
+    gamma REAL,
+    vega REAL,
+    theta REAL,
+    mark_price REAL,
+    underlying_price REAL,
+    exchange_sources_json TEXT NOT NULL DEFAULT '[]',
+    fields_present_json TEXT NOT NULL DEFAULT '[]',
+    FOREIGN KEY (run_id, history_snapshot_id)
+        REFERENCES source_snapshots(run_id, history_snapshot_id)
 );
 
 CREATE TABLE IF NOT EXISTS particle_observations (
@@ -112,6 +144,27 @@ CREATE TABLE IF NOT EXISTS particle_constellations (
     reasons_json TEXT NOT NULL,
     FOREIGN KEY (run_id, history_snapshot_id)
         REFERENCES source_snapshots(run_id, history_snapshot_id)
+);
+
+CREATE TABLE IF NOT EXISTS particle_contract_links (
+    particle_id TEXT NOT NULL REFERENCES particle_observations(particle_id),
+    contract_observation_id TEXT NOT NULL
+        REFERENCES contract_observations(contract_observation_id),
+    link_role TEXT NOT NULL,
+    metric_name TEXT,
+    PRIMARY KEY (particle_id, contract_observation_id, link_role)
+);
+
+CREATE TABLE IF NOT EXISTS constellation_particle_links (
+    constellation_id TEXT NOT NULL
+        REFERENCES particle_constellations(constellation_id),
+    particle_id TEXT NOT NULL REFERENCES particle_observations(particle_id),
+    component TEXT NOT NULL,
+    evidence_role TEXT NOT NULL,
+    movement_contribution REAL NOT NULL DEFAULT 0,
+    direction_contribution REAL NOT NULL DEFAULT 0,
+    included_reason TEXT NOT NULL,
+    PRIMARY KEY (constellation_id, particle_id)
 );
 
 CREATE TABLE IF NOT EXISTS shadow_candidates (
@@ -170,12 +223,30 @@ CREATE TABLE IF NOT EXISTS shadow_outcomes (
     details_json TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS candidate_particle_lineage (
+    candidate_id TEXT NOT NULL REFERENCES shadow_candidates(candidate_id),
+    particle_id TEXT NOT NULL REFERENCES particle_observations(particle_id),
+    constellation_id TEXT NOT NULL
+        REFERENCES particle_constellations(constellation_id),
+    evidence_rank INTEGER NOT NULL,
+    evidence_role TEXT NOT NULL,
+    component TEXT NOT NULL,
+    movement_contribution REAL NOT NULL DEFAULT 0,
+    direction_contribution REAL NOT NULL DEFAULT 0,
+    included_reason TEXT NOT NULL,
+    PRIMARY KEY (candidate_id, particle_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_source_snapshots_timestamp
     ON source_snapshots(run_id, timestamp_utc);
 CREATE INDEX IF NOT EXISTS idx_particle_observations_snapshot
     ON particle_observations(run_id, history_snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_particle_observations_type_timestamp
     ON particle_observations(run_id, particle_type, timestamp_utc);
+CREATE INDEX IF NOT EXISTS idx_contract_observations_contract
+    ON contract_observations(run_id, exchange, contract_id, timestamp_utc);
+CREATE INDEX IF NOT EXISTS idx_contract_observations_snapshot
+    ON contract_observations(run_id, history_snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_constellations_timestamp
     ON particle_constellations(run_id, timestamp_utc);
 CREATE INDEX IF NOT EXISTS idx_shadow_candidates_timestamp
@@ -184,6 +255,8 @@ CREATE INDEX IF NOT EXISTS idx_shadow_candidates_status
     ON shadow_candidates(run_id, candidate_status, setup_family);
 CREATE INDEX IF NOT EXISTS idx_shadow_candidates_episode
     ON shadow_candidates(run_id, candidate_key, timestamp_utc);
+CREATE INDEX IF NOT EXISTS idx_candidate_particle_lineage_candidate
+    ON candidate_particle_lineage(candidate_id, evidence_rank);
 """
 
 
