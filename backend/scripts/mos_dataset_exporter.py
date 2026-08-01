@@ -311,6 +311,7 @@ def _runtime_versions(project_root: Path) -> dict[str, Any]:
         "research_schema_version": namespace.get("RESEARCH_SCHEMA_VERSION"),
         "engine_patch_version": namespace.get("ENGINE_PATCH_VERSION"),
         "dataset_exporter_version": namespace.get("DATASET_EXPORTER_VERSION"),
+        "particle_logic_version": namespace.get("PARTICLE_LOGIC_VERSION"),
     }
 
 

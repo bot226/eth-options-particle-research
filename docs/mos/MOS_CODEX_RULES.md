@@ -73,22 +73,14 @@ Do not modify without explicit task approval:
 
 Update only:
 
-`backend/config/version.py`
+`backend/engine/version.py`
 
-Current stable:
-
-```python
-CODE_VERSION = "research_fix_2026_05_21_v20"
-RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v20_execution_why_not_and_pinning_absorption_debug_v1"
-```
-
-For v21 task:
+Current development branch:
 
 ```python
-CODE_VERSION = "research_fix_2026_05_22_v21"
+CODE_VERSION = "research_fix_2026_08_01_v44"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v21_experimental_short_term_flow_debug_v1"
+ENGINE_PATCH_VERSION = "v51_particle_shadow_replay_v1"
 ```
 
 Do not create duplicate version files.

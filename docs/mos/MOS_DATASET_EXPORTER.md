@@ -68,5 +68,9 @@ python backend/scripts/mos_dataset_exporter.py `
 - time ranges for key tables;
 - runtime version groups already stored in the databases.
 
+On Particle Logic branches the manifest also records
+`particle_logic_version`; the shadow replay itself remains outside the live
+database archive.
+
 Keep the collector on one MOS version during a baseline period. Start a new
 dataset label after any change to MOS runtime logic or schema.

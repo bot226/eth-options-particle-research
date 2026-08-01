@@ -32,9 +32,9 @@ Do **not** turn MOS into a buy/sell signal dashboard.
 ## Current stable Research Layer version
 
 ```python
-CODE_VERSION = "research_fix_2026_05_21_v20"
+CODE_VERSION = "research_fix_2026_08_01_v44"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v20_execution_why_not_and_pinning_absorption_debug_v1"
+ENGINE_PATCH_VERSION = "v51_particle_shadow_replay_v1"
 ```
 
 ## Known working components
@@ -71,7 +71,7 @@ Never change these unless the current task explicitly requests it:
 
 Every code change must update:
 
-`backend/config/version.py`
+`backend/engine/version.py`
 
 Do not create duplicate version files.
 

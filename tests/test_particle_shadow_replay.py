@@ -1,0 +1,239 @@
+import hashlib
+import json
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+
+from research.particle_shadow.common import parse_contract
+from research.particle_shadow.replay import ParticleReplayError, run_replay
+
+
+def file_hash(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+class ParticleShadowReplayTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.dataset = self.root / "dataset"
+        self.dataset.mkdir()
+        self.history_db = self.dataset / "history.db"
+        self.research_db = self.dataset / "mos_research.db"
+        self._create_history_db()
+        self._create_research_db()
+        (self.dataset / "manifest.json").write_text(
+            json.dumps({"dataset": {"label": "synthetic_test"}}),
+            encoding="utf-8",
+        )
+
+    def _create_history_db(self):
+        connection = sqlite3.connect(self.history_db)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE snapshots (
+                    id INTEGER PRIMARY KEY,
+                    ts REAL NOT NULL,
+                    oi_json TEXT,
+                    pdf_json TEXT,
+                    gex_json TEXT,
+                    term_structure_json TEXT,
+                    exchange_data_json TEXT
+                )
+                """
+            )
+            for index, timestamp in enumerate((1_000.0, 1_300.0, 1_600.0, 1_900.0), start=1):
+                call_oi = 100.0 + index * 10.0
+                put_oi = 80.0 + index * 2.0
+                oi = {} if index == 4 else {
+                    "BTC-20260814-100-C": call_oi,
+                    "BTC-20260814-90-P": put_oi,
+                }
+                gex = {
+                    "data": [
+                        {
+                            "strike": 100,
+                            "call_gex": 20.0 + index,
+                            "put_gex": -10.0 - index,
+                            "net_gex": 10.0,
+                        },
+                        {
+                            "strike": 90,
+                            "call_gex": 5.0,
+                            "put_gex": -20.0 - index,
+                            "net_gex": -15.0 - index,
+                        },
+                    ],
+                    "metrics": {
+                        "total_net_gex": 50.0,
+                        "gamma_wall_above": 100.3,
+                        "gamma_wall_below": 90.0,
+                        "gamma_flip": 96.0,
+                    },
+                }
+                term = {
+                    "data": [
+                        {"expiry": "20260814", "dte": 13, "atm_iv": 0.30 + index * 0.001}
+                    ],
+                    "metrics": {"regime": "COMPRESSION"},
+                }
+                connection.execute(
+                    "INSERT INTO snapshots VALUES (?, ?, ?, '{}', ?, ?, '{}')",
+                    (index, timestamp, json.dumps(oi), json.dumps(gex), json.dumps(term)),
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def _create_research_db(self):
+        connection = sqlite3.connect(self.research_db)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE snapshots (
+                    timestamp_utc REAL,
+                    snapshot_id TEXT,
+                    snapshot_sequence_id INTEGER,
+                    spot_price REAL,
+                    current_state TEXT,
+                    gamma_regime TEXT,
+                    oi_total REAL,
+                    net_gex REAL,
+                    atm_iv REAL,
+                    iv_velocity REAL,
+                    expansion_probability REAL,
+                    synthetic_flow_pressure REAL,
+                    execution_timing_state TEXT,
+                    call_wall REAL,
+                    put_wall REAL,
+                    data_quality TEXT,
+                    active_sources TEXT,
+                    exclude_from_analysis INTEGER,
+                    exclude_reason TEXT
+                )
+                """
+            )
+            for index, timestamp in enumerate((999.0, 1_299.0, 1_599.0, 1_899.0), start=1):
+                connection.execute(
+                    "INSERT INTO snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        timestamp,
+                        f"snapshot-{index}",
+                        index,
+                        100.0,
+                        "PINNING",
+                        "POSITIVE_GAMMA",
+                        200.0,
+                        50.0,
+                        30.0,
+                        0.0,
+                        20.0,
+                        0.0,
+                        "WAIT",
+                        100.3,
+                        90.0,
+                        "GOOD",
+                        '["bybit"]',
+                        0,
+                        "",
+                    ),
+                )
+            connection.execute(
+                """
+                CREATE TABLE ohlcv_candles (
+                    timestamp_utc REAL,
+                    open REAL,
+                    high REAL,
+                    low REAL,
+                    close REAL,
+                    exchange TEXT,
+                    symbol TEXT,
+                    timeframe TEXT,
+                    ohlcv_source TEXT,
+                    candle_source_verified INTEGER
+                )
+                """
+            )
+            for timestamp in range(900, 2_000, 60):
+                close = 100.0 + (timestamp - 900) / 10_000.0
+                connection.execute(
+                    "INSERT INTO ohlcv_candles VALUES (?, ?, ?, ?, ?, 'bybit', 'BTCUSDT', '1m', 'test', 1)",
+                    (timestamp, close, close + 0.1, close - 0.1, close),
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_parses_bybit_and_deribit_contract_names(self):
+        bybit = parse_contract("BTC-20260814-62500-C")
+        deribit = parse_contract("BTC-31JUL26-120000-P")
+        self.assertEqual((bybit.expiry, bybit.strike, bybit.option_type), ("20260814", 62500.0, "C"))
+        self.assertEqual((deribit.expiry, deribit.strike, deribit.option_type), ("31JUL26", 120000.0, "P"))
+        self.assertIsNone(parse_contract("invalid"))
+
+    def test_replay_is_read_only_and_produces_explainable_shadow_database(self):
+        before = (file_hash(self.history_db), file_hash(self.research_db))
+        output = self.root / "particle_shadow.db"
+        output_path, summary = run_replay(self.dataset, output)
+        after = (file_hash(self.history_db), file_hash(self.research_db))
+
+        self.assertEqual(before, after)
+        self.assertEqual(output_path, output.resolve())
+        self.assertEqual(summary["counts"]["source_snapshots"], 4)
+        self.assertGreater(summary["counts"]["particle_observations"], 0)
+        self.assertGreater(summary["counts"]["particle_constellations"], 0)
+        self.assertGreater(summary["counts"]["shadow_candidates"], 0)
+        self.assertTrue(output.with_suffix(".summary.json").is_file())
+
+        connection = sqlite3.connect(output)
+        try:
+            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertEqual(
+                connection.execute(
+                    "SELECT value FROM schema_metadata WHERE key='mode'"
+                ).fetchone()[0],
+                "offline_read_only_shadow",
+            )
+            self.assertEqual(
+                connection.execute("SELECT status FROM shadow_runs").fetchone()[0],
+                "COMPLETE",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT exclude_from_analysis FROM source_snapshots "
+                    "WHERE history_snapshot_id=4"
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM particle_observations "
+                    "WHERE history_snapshot_id=4"
+                ).fetchone()[0],
+                0,
+            )
+            self.assertGreater(
+                connection.execute(
+                    "SELECT COUNT(*) FROM particle_observations WHERE features_json != '{}'"
+                ).fetchone()[0],
+                0,
+            )
+            candidate_rows = connection.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT candidate_key), SUM(candidate_is_new) "
+                "FROM shadow_candidates"
+            ).fetchone()
+            self.assertGreater(candidate_rows[0], 1)
+            self.assertEqual(candidate_rows[1], 1)
+            self.assertEqual(candidate_rows[2], 1)
+        finally:
+            connection.close()
+
+        with self.assertRaises(ParticleReplayError):
+            run_replay(self.dataset, output)
+
+
+if __name__ == "__main__":
+    unittest.main()

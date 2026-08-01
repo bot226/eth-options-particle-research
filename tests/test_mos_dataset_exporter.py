@@ -21,6 +21,16 @@ class MosDatasetExporterTest(unittest.TestCase):
         self.data_dir = self.root / "data"
         self.output_dir = self.root / "exports"
         self.data_dir.mkdir()
+        version_dir = self.root / "backend" / "engine"
+        version_dir.mkdir(parents=True)
+        (version_dir / "version.py").write_text(
+            "CODE_VERSION = 'test'\n"
+            "RESEARCH_SCHEMA_VERSION = '2.0'\n"
+            "ENGINE_PATCH_VERSION = 'test'\n"
+            "DATASET_EXPORTER_VERSION = '1.0.0'\n"
+            "PARTICLE_LOGIC_VERSION = 'particle_shadow_v1'\n",
+            encoding="utf-8",
+        )
         self.connections = []
         for database_name in REQUIRED_DATABASES:
             connection = sqlite3.connect(self.data_dir / database_name)
@@ -58,6 +68,10 @@ class MosDatasetExporterTest(unittest.TestCase):
         self.assertTrue(archive_path.is_file())
         self.assertFalse(manifest["exporter"]["source_databases_modified"])
         self.assertEqual(manifest["errors"], [])
+        self.assertIn(
+            "particle_logic_version",
+            manifest["project"]["runtime_versions"],
+        )
 
         extracted_dir = self.root / "extracted"
         with zipfile.ZipFile(archive_path) as archive:

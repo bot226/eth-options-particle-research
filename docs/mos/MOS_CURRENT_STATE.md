@@ -2,13 +2,28 @@
 
 ## Current stable backend state
 
-Current stable Research Layer version:
+Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_05_21_v20"
+CODE_VERSION = "research_fix_2026_08_01_v44"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v20_execution_why_not_and_pinning_absorption_debug_v1"
+ENGINE_PATCH_VERSION = "v51_particle_shadow_replay_v1"
+PARTICLE_LOGIC_VERSION = "particle_shadow_v1"
 ```
+
+The last collected clean-MOS baseline remains on `research_fix_2026_06_17_v43`
+with engine patch `v50_immediate_entry_candidate_snapshot`. Particle Logic v1
+is an offline shadow layer and is not connected to live MOS decisions.
+
+## Particle Logic shadow v1
+
+- reads MOS Dataset Exporter archives;
+- opens `history.db` and `mos_research.db` read-only;
+- derives per-contract OI, per-strike GEX, wall, gamma-flip, and front-IV particles;
+- separates movement evidence from directional evidence;
+- writes a standalone `particle_shadow.db`;
+- records shadow watches/candidates and 5/15/30/60/120/240-minute outcomes;
+- does not modify live databases, State Machine, execution, events, or manual trading.
 
 ## Latest validated v20 database
 
