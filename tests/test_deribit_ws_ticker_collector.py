@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 import time
@@ -70,6 +71,45 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         diagnostics = self.adapter.get_diagnostics()
         self.assertEqual(diagnostics["deribit_data_transport"], "websocket_ticker_cache")
         self.assertEqual(diagnostics["deribit_ws_cached_tickers"], 1)
+
+    async def test_concurrent_instrument_discovery_uses_one_rest_request(self):
+        instruments = [
+            {"instrument_name": "BTC-14AUG26-65000-C"},
+            {"instrument_name": "BTC-14AUG26-65000-P"},
+        ]
+
+        async def delayed_discovery(*args, **kwargs):
+            await asyncio.sleep(0.01)
+            return instruments
+
+        rpc_get = AsyncMock(side_effect=delayed_discovery)
+        with patch.object(self.adapter, "_rpc_get", new=rpc_get):
+            first, second = await asyncio.gather(
+                self.adapter.fetch_instruments(),
+                self.adapter.fetch_instruments(),
+            )
+
+        self.assertEqual(first, instruments)
+        self.assertEqual(second, instruments)
+        self.assertEqual(rpc_get.await_count, 1)
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(diagnostics["deribit_instrument_cache_count"], 2)
+
+    async def test_instrument_discovery_falls_back_to_last_good_cache(self):
+        instruments = [
+            {"instrument_name": "BTC-14AUG26-65000-C"},
+        ]
+        with patch.object(
+            self.adapter,
+            "_rpc_get",
+            new=AsyncMock(side_effect=[instruments, None]),
+        ):
+            first = await self.adapter.fetch_instruments()
+            self.adapter._instruments_cache_ts = 0.0
+            fallback = await self.adapter.fetch_instruments()
+
+        self.assertEqual(first, instruments)
+        self.assertEqual(fallback, instruments)
 
     async def test_subscription_refresh_batches_channels_and_purges_expired_cache(self):
         instruments = [

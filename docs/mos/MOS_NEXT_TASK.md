@@ -1,6 +1,6 @@
 # MOS_NEXT_TASK.md
 
-## Task: validate v55 Deribit WebSocket subscription backpressure
+## Task: validate v56 Deribit instrument discovery single-flight
 
 ## Goal
 
@@ -10,6 +10,8 @@ poll loop and without changing any market-structure or candidate formula.
 ## Runtime design
 
 - REST `get_instruments` discovers active BTC option contracts.
+- Concurrent callers share one REST discovery request and the last successful
+  instrument list remains available for 15 minutes.
 - WebSocket `ticker.<instrument>.agg2` supplies OI, volume, IV, prices, and Greeks.
 - Subscriptions use at most 500 channels per request, are paced, confirmed by
   JSON-RPC response, and refreshed every 15 minutes.
@@ -47,6 +49,7 @@ valid_iv_count > 0
 valid_greeks_count > 0
 valid_gamma_count > 0
 deribit_ws_cache_age_sec < 30
+deribit_instrument_cache_count > 0
 deribit_ws_subscribed_tickers > 0
 deribit_ws_pending_subscription_requests = 0
 deribit_ws_pending_tickers = 0

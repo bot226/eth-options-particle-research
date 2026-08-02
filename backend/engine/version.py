@@ -4,9 +4,9 @@ All engines and loggers MUST import version constants from here.
 Never define CODE_VERSION, RESEARCH_SCHEMA_VERSION, or ENGINE_PATCH_VERSION elsewhere.
 """
 
-CODE_VERSION = "research_fix_2026_08_02_v48"
+CODE_VERSION = "research_fix_2026_08_02_v49"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v55_deribit_ws_subscription_backpressure"
+ENGINE_PATCH_VERSION = "v56_deribit_instrument_discovery_singleflight"
 DATASET_EXPORTER_VERSION = "1.1.0"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 

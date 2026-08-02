@@ -2333,11 +2333,11 @@ async def deribit_smoke_test():
     import time
     
     adapter = DeribitAdapter()
-    await adapter.start()
     
     try:
         t0 = time.time()
         instruments = await adapter.fetch_instruments()
+        await adapter.start()
         cache_ready = await adapter.wait_for_option_tickers(timeout=20.0)
         if cache_ready:
             await asyncio.sleep(3.0)

@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_02_v48"
+CODE_VERSION = "research_fix_2026_08_02_v49"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v55_deribit_ws_subscription_backpressure"
+ENGINE_PATCH_VERSION = "v56_deribit_instrument_discovery_singleflight"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -74,6 +74,24 @@ v55 therefore:
 - retries only rejected or partially acknowledged channels;
 - exposes pending request and pending ticker counts in diagnostics;
 - leaves cache freshness, 70% coverage, normalization, MOS formulas, and
+  Particle Logic scoring unchanged.
+
+## Deribit instrument discovery single-flight v6
+
+The first v55 smoke test exposed a second startup issue: the endpoint and the
+background WebSocket task started two simultaneous `get_instruments` calls.
+The endpoint received 866 instruments, while the background call returned an
+empty result and therefore created zero ticker subscriptions.
+
+v56 therefore:
+
+- performs only one in-flight instrument discovery request per adapter;
+- shares a successful instrument list with the WebSocket refresh task;
+- caches the last good list for 15 minutes and uses it after a transient REST
+  failure;
+- runs smoke-test discovery before starting the background WebSocket task;
+- exposes instrument cache count and age in diagnostics;
+- leaves subscription acknowledgement, cache coverage, MOS formulas, and
   Particle Logic scoring unchanged.
 
 ## Latest validated v20 database
@@ -150,6 +168,6 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v48 to the collector without clearing databases, run the Deribit smoke
+Deploy v49 to the collector without clearing databases, run the Deribit smoke
 test, and verify that both Bybit and Deribit contract rows reach the next
 five-minute history snapshot. Do not promote contract particles into scoring.

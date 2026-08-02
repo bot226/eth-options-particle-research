@@ -30,6 +30,7 @@ _WS_SUBSCRIBE_BATCH_SIZE = 500
 _WS_SUBSCRIBE_BATCH_DELAY_SEC = 0.35
 _WS_INSTRUMENT_REFRESH_SEC = 15 * 60
 _WS_INSTRUMENT_RETRY_SEC = 30
+_INSTRUMENT_CACHE_TTL_SEC = 15 * 60
 _WS_TICKER_CACHE_MAX_AGE_SEC = 30
 _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
 
@@ -52,6 +53,9 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._tickers_cache_ts: float = 0.0
         self._subscribed_ticker_channels: set[str] = set()
         self._pending_ticker_channels: dict[int, set[str]] = {}
+        self._instrument_discovery_lock = asyncio.Lock()
+        self._instruments_cache: list[dict] = []
+        self._instruments_cache_ts: float = 0.0
         self._ws_instruments_count: int = 0
         self._ws_ticker_message_count: int = 0
         self._ws_last_ticker_ts: float = 0.0
@@ -136,14 +140,39 @@ class DeribitAdapter(BaseExchangeAdapter):
 
     async def fetch_instruments(self) -> list[dict]:
         """Fetch all active BTC option instruments."""
-        result = await self._rpc_get("get_instruments", {
-            "currency": "BTC",
-            "kind": "option",
-            "expired": "false",
-        }, max_retries=1)
-        if result is None:
+        now = time.time()
+        if (
+            self._instruments_cache
+            and now - self._instruments_cache_ts < _INSTRUMENT_CACHE_TTL_SEC
+        ):
+            return list(self._instruments_cache)
+
+        async with self._instrument_discovery_lock:
+            now = time.time()
+            if (
+                self._instruments_cache
+                and now - self._instruments_cache_ts < _INSTRUMENT_CACHE_TTL_SEC
+            ):
+                return list(self._instruments_cache)
+
+            result = await self._rpc_get("get_instruments", {
+                "currency": "BTC",
+                "kind": "option",
+                "expired": "false",
+            }, max_retries=1)
+            if isinstance(result, list) and result:
+                self._instruments_cache = list(result)
+                self._instruments_cache_ts = time.time()
+                self.last_error = ""
+                return list(self._instruments_cache)
+
+            if self._instruments_cache:
+                log.warning(
+                    "Deribit instrument discovery failed; using cached set (%d)",
+                    len(self._instruments_cache),
+                )
+                return list(self._instruments_cache)
             return []
-        return result if isinstance(result, list) else []
 
     async def fetch_option_tickers(self) -> list[dict]:
         """Return a snapshot of the live Deribit WebSocket ticker cache.
@@ -326,7 +355,8 @@ class DeribitAdapter(BaseExchangeAdapter):
             if str(item.get("instrument_name", "")).startswith("BTC-")
         })
         if not instrument_names:
-            self.last_error = "instrument_discovery_empty"
+            if not self.last_error:
+                self.last_error = "instrument_discovery_empty"
             self.last_error_ts = time.time()
             return False
 
@@ -506,6 +536,12 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_disabled_reason": self.disabled_reason,
             "deribit_data_transport": "websocket_ticker_cache",
             "deribit_ws_instruments_count": self._ws_instruments_count,
+            "deribit_instrument_cache_count": len(self._instruments_cache),
+            "deribit_instrument_cache_age_sec": (
+                round(time.time() - self._instruments_cache_ts, 3)
+                if self._instruments_cache_ts > 0
+                else None
+            ),
             "deribit_ws_subscribed_tickers": len(self._subscribed_ticker_channels),
             "deribit_ws_pending_subscription_requests": len(
                 self._pending_ticker_channels

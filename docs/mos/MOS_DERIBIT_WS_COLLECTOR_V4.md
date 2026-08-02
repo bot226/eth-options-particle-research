@@ -1,4 +1,4 @@
-# MOS Deribit WebSocket Option Ticker Collector v4/v5
+# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6
 
 ## Why it exists
 
@@ -58,3 +58,10 @@ The first approximately 40-minute collector export contained 138 research
 snapshots and nine structural snapshots, but all remained Bybit-only. The
 Deribit cache stayed in `deribit_ws_ticker_cache_warming`; this is the reason
 for the v55 subscription backpressure and acknowledgement patch.
+
+## v55 smoke-test result
+
+The endpoint's direct REST call returned 866 instruments, but the simultaneous
+background discovery returned an empty result. Diagnostics therefore showed
+`deribit_ws_instruments_count = 0` and no subscription requests. v56 serializes
+those calls and reuses the successful instrument list.
