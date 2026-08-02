@@ -200,6 +200,40 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             release.set()
             await first_task
 
+    def test_bootstrap_cycle_skips_fresh_full_core_tickers(self):
+        instrument_names = [
+            f"BTC-14AUG26-{60_000 + index}-C"
+            for index in range(240)
+        ]
+        for name in instrument_names[:100]:
+            self.adapter._store_ticker_snapshot(
+                {
+                    "instrument_name": name,
+                    "mark_iv": 55.0,
+                    "greeks": {
+                        "delta": 0.4,
+                        "gamma": 0.00003,
+                        "vega": 15.0,
+                        "theta": -6.0,
+                    },
+                },
+                stream_message=False,
+            )
+
+        baselines = self.adapter._bootstrap_refresh_baselines(
+            instrument_names
+        )
+
+        self.assertEqual(len(baselines), 140)
+        self.assertTrue(all(
+            name not in baselines
+            for name in instrument_names[:100]
+        ))
+        self.assertTrue(all(
+            name in baselines
+            for name in instrument_names[100:]
+        ))
+
     async def test_concurrent_instrument_discovery_uses_one_rest_request(self):
         instruments = [
             {"instrument_name": "BTC-14AUG26-65000-C"},
@@ -259,7 +293,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(refreshed)
-        self.assertEqual(len(websocket.messages), 3)
+        self.assertEqual(len(websocket.messages), 1)
         subscribed = {
             channel
             for message in websocket.messages

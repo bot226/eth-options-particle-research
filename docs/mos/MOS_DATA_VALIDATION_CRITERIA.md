@@ -58,8 +58,8 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-For v59 Deribit WebSocket collection, the smoke test must report after the
-adaptive bootstrap reaches safe research-core coverage:
+For v60 Deribit WebSocket collection, the smoke test must report after the
+deduplicated bootstrap reaches safe research-core coverage:
 
 ```text
 status = ok
@@ -79,6 +79,7 @@ deribit_ws_core_fresh_tickers / deribit_ws_core_instruments_count >= 0.7
 deribit_ws_core_full_tickers / deribit_ws_core_instruments_count >= 0.7
 deribit_ws_bootstrap_state = running or complete
 deribit_ws_bootstrap_success_count > 0
+deribit_ws_bootstrap_cycle_target_count <= deribit_ws_bootstrap_target_count
 ```
 
 `deribit_ws_cache_coverage_ratio` is the readiness ratio for the balanced core.

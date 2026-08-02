@@ -1,6 +1,6 @@
 # MOS_NEXT_TASK.md
 
-## Task: validate v59 Deribit adaptive core bootstrap
+## Task: validate v60 Deribit deduplicated core bootstrap
 
 ## Goal
 
@@ -13,13 +13,17 @@ one short validation window and without changing any MOS or candidate formula.
 - REST `get_instruments` discovers the complete active BTC option chain.
 - A 240-contract research core selects near-ATM contracts evenly across every
   available expiry.
-- WebSocket `incremental_ticker.<instrument>` continuously updates the core in
-  100-channel subscription batches.
+- WebSocket `incremental_ticker.<instrument>` continuously updates the complete
+  core through one 240-channel subscription request.
 - A separate WebSocket calls `public/ticker` in two-request batches, at no more
   than two requests per second, prioritizing the core and then backfilling the
   complete discovered chain.
+- After a five-second subscription head start, the bootstrap freezes baselines
+  only for stale or missing contracts. Fresh complete subscription snapshots
+  are never requested again during that cycle.
 - Three consecutive empty RPC batches trigger a connection restart and another
-  pass retries only observations not refreshed during the current cycle.
+  pass retries only targets whose receive timestamp has not advanced beyond its
+  frozen baseline.
 - The live MOS poll reads the local cache and never waits for bulk Deribit REST.
 - Observations older than five minutes are excluded.
 - Core coverage below 70% is warmup. Full-chain coverage remains diagnostic and
@@ -54,6 +58,7 @@ deribit_ws_cache_coverage_ratio >= 0.7
 deribit_ws_core_full_tickers >= 0.7 * deribit_ws_core_instruments_count
 deribit_ws_chain_coverage_ratio >= 0
 deribit_ws_bootstrap_success_count > 0
+deribit_ws_bootstrap_cycle_target_count <= deribit_ws_bootstrap_target_count
 ```
 
 The first smoke test may wait up to 120 seconds. The adaptive bootstrap can
@@ -80,5 +85,7 @@ Both `bybit` and `deribit` must appear. Do not clear either database.
 - calls, puts, multiple expiries, IV, volume, and complete Greeks are present;
 - stale observations are rejected after five minutes;
 - full-chain backfill continues independently;
+- successful bootstrap replies increase unique fresh-full coverage rather than
+  repeatedly refreshing the same first subscription block;
 - existing tests and Particle Logic replay tests pass;
 - no clean database is required.

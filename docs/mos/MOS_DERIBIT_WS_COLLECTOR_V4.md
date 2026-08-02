@@ -1,4 +1,4 @@
-# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6/v7/v8/v9
+# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6/v7/v8/v9/v10
 
 ## Why it exists
 
@@ -32,8 +32,7 @@ underlying and option prices, plus nested delta, gamma, vega, and theta.
 - A partially warmed cache is excluded until at least 70% of the balanced
   240-contract research core has delivered ticker snapshots.
 - Instrument discovery retries independently from message handling.
-- Subscription requests are bounded to 100 core channels per message; every batch
-  must be acknowledged before the next one is sent.
+- The complete 240-contract core is sent in one bounded subscription request.
 - A channel becomes confirmed only after its JSON-RPC subscription response.
 - Failed or partially acknowledged batches retry only missing channels.
 - The first incremental-ticker notification seeds a full contract snapshot;
@@ -107,3 +106,12 @@ subscribes only that core continuously. It requests two full tickers per second,
 reconnects after three empty batches, and continues the remaining full-chain
 backfill after the core becomes usable. Five-minute freshness matches the slow
 structural snapshot cadence without permitting indefinite stale reuse.
+
+## v59 smoke-test result and v60 deduplication
+
+After two v59 smoke windows, the core remained at 107 unique contracts even
+though the bootstrap recorded 99 successful RPC replies. Those replies were
+mostly duplicate refreshes of the first 100 subscription snapshots. v60 freezes
+per-contract baselines after the subscription head start, skips every already
+fresh complete ticker, and subscribes the complete 240-contract core in one
+request instead of waiting on three serialized acknowledgements.

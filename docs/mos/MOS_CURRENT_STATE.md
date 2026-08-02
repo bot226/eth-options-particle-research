@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v52"
+CODE_VERSION = "research_fix_2026_08_03_v53"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v59_deribit_adaptive_core_bootstrap"
+ENGINE_PATCH_VERSION = "v60_deribit_deduplicated_core_bootstrap"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -163,6 +163,28 @@ v59 therefore:
 - leaves MOS formulas, database schemas, manual entries, and Particle Logic
   scoring unchanged.
 
+## Deribit deduplicated core bootstrap v10
+
+The second v59 collector-host run reached 107 complete core contracts, but 99
+successful RPC replies increased the unique cache by only one contract. The
+bootstrap cycle had frozen its start timestamp before the first subscription
+snapshots arrived, so it treated the already-fresh first 100 contracts as
+refresh targets and requested them again. The `100 + 100 + 40` subscription
+split also stalled on the second acknowledgement exactly as earlier large-chain
+splits had done.
+
+v60 therefore:
+
+- freezes bootstrap baselines only after the five-second subscription head
+  start and completely excludes every ticker that is already fresh and full;
+- considers a stale or missing target complete only after its receive timestamp
+  advances beyond that target's frozen baseline;
+- subscribes the complete 240-contract core in one bounded request, which is
+  smaller than the previously confirmed 500-channel request;
+- reports the actual target count of the current deduplicated bootstrap cycle;
+- leaves the core definition, two-request RPC pacing, five-minute freshness,
+  MOS formulas, databases, manual entries, and Particle Logic unchanged.
+
 ## Latest validated v20 database
 
 Latest validated database showed approximately:
@@ -237,6 +259,6 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v52 to the collector without clearing databases, run the Deribit smoke
+Deploy v53 to the collector without clearing databases, run the Deribit smoke
 test, and verify that both Bybit and Deribit contract rows reach the next
 five-minute history snapshot. Do not promote contract particles into scoring.

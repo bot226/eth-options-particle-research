@@ -26,7 +26,8 @@ from config import (
 log = logging.getLogger(__name__)
 
 _WS_TICKER_CHANNEL_PREFIX = "incremental_ticker."
-_WS_SUBSCRIBE_BATCH_SIZE = 100
+_WS_CORE_UNIVERSE_SIZE = 240
+_WS_SUBSCRIBE_BATCH_SIZE = _WS_CORE_UNIVERSE_SIZE
 _WS_SUBSCRIBE_BATCH_DELAY_SEC = 1.0
 _WS_SUBSCRIBE_ACK_TIMEOUT_SEC = 30.0
 _WS_INSTRUMENT_REFRESH_SEC = 15 * 60
@@ -34,7 +35,6 @@ _WS_INSTRUMENT_RETRY_SEC = 30
 _INSTRUMENT_CACHE_TTL_SEC = 15 * 60
 _WS_TICKER_CACHE_MAX_AGE_SEC = 5 * 60
 _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
-_WS_CORE_UNIVERSE_SIZE = 240
 _WS_BOOTSTRAP_START_DELAY_SEC = 5.0
 _WS_BOOTSTRAP_BATCH_SIZE = 2
 _WS_BOOTSTRAP_BATCH_INTERVAL_SEC = 1.0
@@ -75,6 +75,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_subscription_error_count: int = 0
         self._ticker_bootstrap_state: str = "idle"
         self._ticker_bootstrap_target_count: int = 0
+        self._ticker_bootstrap_cycle_target_count: int = 0
         self._ticker_bootstrap_request_count: int = 0
         self._ticker_bootstrap_success_count: int = 0
         self._ticker_bootstrap_error_count: int = 0
@@ -599,6 +600,17 @@ class DeribitAdapter(BaseExchangeAdapter):
             self._bootstrap_full_tickers(list(instrument_names))
         )
 
+    def _bootstrap_refresh_baselines(
+        self,
+        instrument_names: list[str],
+    ) -> dict[str, float]:
+        """Freeze only missing or stale tickers as targets for one cycle."""
+        return {
+            name: self._ticker_received_ts_by_instrument.get(name, 0.0)
+            for name in instrument_names
+            if not self._ticker_has_fresh_full_option_data(name)
+        }
+
     async def _bootstrap_full_tickers(
         self,
         instrument_names: list[str],
@@ -609,19 +621,25 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ticker_bootstrap_started_ts = time.time()
         self._ticker_bootstrap_completed_ts = 0.0
         self._ticker_bootstrap_last_error = ""
-        bootstrap_cycle_started_ts = self._ticker_bootstrap_started_ts
+        self._ticker_bootstrap_cycle_target_count = 0
 
         try:
             await asyncio.sleep(_WS_BOOTSTRAP_START_DELAY_SEC)
+            refresh_baselines = self._bootstrap_refresh_baselines(
+                instrument_names
+            )
+            self._ticker_bootstrap_cycle_target_count = len(
+                refresh_baselines
+            )
             for pass_index in range(_WS_BOOTSTRAP_MAX_PASSES):
                 missing = [
                     name
-                    for name in instrument_names
+                    for name, baseline_ts in refresh_baselines.items()
                     if (
                         not self._ticker_has_full_option_data(name)
                         or self._ticker_received_ts_by_instrument.get(
                             name, 0.0
-                        ) < bootstrap_cycle_started_ts
+                        ) <= baseline_ts
                     )
                 ]
                 if not missing or not self._running:
@@ -677,9 +695,9 @@ class DeribitAdapter(BaseExchangeAdapter):
                     not self._ticker_has_full_option_data(name)
                     or self._ticker_received_ts_by_instrument.get(
                         name, 0.0
-                    ) < bootstrap_cycle_started_ts
+                    ) <= baseline_ts
                 )
-                for name in instrument_names
+                for name, baseline_ts in refresh_baselines.items()
             )
             self._ticker_bootstrap_state = (
                 "complete" if missing_count == 0 else "degraded"
@@ -1019,6 +1037,9 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_ws_core_full_tickers": full_core_ticker_count,
             "deribit_ws_bootstrap_state": self._ticker_bootstrap_state,
             "deribit_ws_bootstrap_target_count": self._ticker_bootstrap_target_count,
+            "deribit_ws_bootstrap_cycle_target_count": (
+                self._ticker_bootstrap_cycle_target_count
+            ),
             "deribit_ws_bootstrap_request_count": self._ticker_bootstrap_request_count,
             "deribit_ws_bootstrap_success_count": self._ticker_bootstrap_success_count,
             "deribit_ws_bootstrap_error_count": self._ticker_bootstrap_error_count,
