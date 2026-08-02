@@ -32,37 +32,6 @@ class _FakeWebSocket:
             })
 
 
-class _FakeTickerRpcWebSocket:
-    def __init__(self):
-        self.messages = []
-        self.responses = asyncio.Queue()
-
-    async def send(self, message):
-        parsed = json.loads(message)
-        self.messages.append(parsed)
-        instrument_name = parsed["params"]["instrument_name"]
-        await self.responses.put(json.dumps({
-            "jsonrpc": "2.0",
-            "id": parsed["id"],
-            "result": {
-                "instrument_name": instrument_name,
-                "timestamp": int(time.time() * 1000),
-                "open_interest": 12.5,
-                "mark_iv": 55.0,
-                "stats": {"volume": 3.25},
-                "greeks": {
-                    "delta": 0.4,
-                    "gamma": 0.00003,
-                    "vega": 15.0,
-                    "theta": -6.0,
-                },
-            },
-        }))
-
-    async def recv(self):
-        return await self.responses.get()
-
-
 class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.adapter = DeribitAdapter()
@@ -110,7 +79,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         diagnostics = self.adapter.get_diagnostics()
         self.assertEqual(
             diagnostics["deribit_data_transport"],
-            "websocket_incremental_ticker_cache+rpc_bootstrap",
+            "websocket_incremental_ticker_cache+rest_ticker_bootstrap",
         )
         self.assertEqual(diagnostics["deribit_ws_cached_tickers"], 1)
         self.assertEqual(diagnostics["deribit_ws_fresh_tickers"], 1)
@@ -148,24 +117,40 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ticker["greeks"]["delta"], 0.45)
         self.assertEqual(ticker["greeks"]["gamma"], 0.000031)
 
-    async def test_full_ticker_rpc_batch_seeds_greeks_for_every_contract(self):
-        websocket = _FakeTickerRpcWebSocket()
+    async def test_rest_ticker_batch_seeds_greeks_for_every_contract(self):
         instrument_names = [
             "BTC-14AUG26-65000-C",
             "BTC-14AUG26-65000-P",
         ]
 
-        successes = await self.adapter._bootstrap_ticker_batch(
-            websocket,
-            instrument_names,
-        )
+        async def ticker_result(method, params, max_retries=3):
+            self.assertEqual(method, "ticker")
+            self.assertEqual(max_retries, 1)
+            return {
+                "instrument_name": params["instrument_name"],
+                "timestamp": int(time.time() * 1000),
+                "open_interest": 12.5,
+                "mark_iv": 55.0,
+                "stats": {"volume": 3.25},
+                "greeks": {
+                    "delta": 0.4,
+                    "gamma": 0.00003,
+                    "vega": 15.0,
+                    "theta": -6.0,
+                },
+            }
+
+        with patch.object(
+            self.adapter,
+            "_rpc_get",
+            new=AsyncMock(side_effect=ticker_result),
+        ) as rpc_get:
+            successes = await self.adapter._bootstrap_ticker_rest_batch(
+                instrument_names
+            )
 
         self.assertEqual(successes, 2)
-        self.assertEqual(len(websocket.messages), 2)
-        self.assertTrue(all(
-            message["method"] == "public/ticker"
-            for message in websocket.messages
-        ))
+        self.assertEqual(rpc_get.await_count, 2)
         self.assertEqual(len(self.adapter.get_cached_tickers()), 2)
         self.assertTrue(all(
             self.adapter._ticker_has_full_option_data(name)
@@ -176,6 +161,31 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics["deribit_ws_bootstrap_request_count"], 2)
         self.assertEqual(diagnostics["deribit_ws_bootstrap_success_count"], 2)
         self.assertEqual(diagnostics["deribit_ws_bootstrap_error_count"], 0)
+        self.assertEqual(
+            diagnostics["deribit_ticker_bootstrap_transport"],
+            "rest_public_ticker",
+        )
+
+    async def test_rest_ticker_batch_counts_missing_results(self):
+        self.adapter.last_error = "rest_timeout"
+        with patch.object(
+            self.adapter,
+            "_rpc_get",
+            new=AsyncMock(return_value=None),
+        ):
+            successes = await self.adapter._bootstrap_ticker_rest_batch([
+                "BTC-14AUG26-65000-C",
+                "BTC-14AUG26-65000-P",
+            ])
+
+        self.assertEqual(successes, 0)
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(diagnostics["deribit_ws_bootstrap_request_count"], 2)
+        self.assertEqual(diagnostics["deribit_ws_bootstrap_error_count"], 2)
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_last_error"],
+            "rest_timeout",
+        )
 
     async def test_bootstrap_singleflight_does_not_duplicate_connections(self):
         started = asyncio.Event()

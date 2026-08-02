@@ -32,9 +32,9 @@ Do **not** turn MOS into a buy/sell signal dashboard.
 ## Current stable Research Layer version
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v53"
+CODE_VERSION = "research_fix_2026_08_03_v54"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v60_deribit_deduplicated_core_bootstrap"
+ENGINE_PATCH_VERSION = "v61_deribit_rest_ticker_bootstrap"
 ```
 
 ## Known working components

@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v53"
+CODE_VERSION = "research_fix_2026_08_03_v54"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v60_deribit_deduplicated_core_bootstrap"
+ENGINE_PATCH_VERSION = "v61_deribit_rest_ticker_bootstrap"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -185,6 +185,28 @@ v60 therefore:
 - leaves the core definition, two-request RPC pacing, five-minute freshness,
   MOS formulas, databases, manual entries, and Particle Logic unchanged.
 
+## Deribit REST ticker bootstrap v11
+
+The v60 collector-host run confirmed correct deduplication and one-request core
+subscription: all 240 subscriptions were acknowledged with no pending channels,
+and 36 successful bootstrap replies increased unique coverage. However, the
+temporary bootstrap WebSocket closed without a close frame and completed only
+48 requests in 116 seconds before ending degraded at 86 core contracts.
+
+v61 therefore:
+
+- keeps `incremental_ticker` WebSocket subscriptions as the continuous live
+  update stream for the complete 240-contract core;
+- replaces only the temporary bootstrap socket with Deribit's lightweight
+  per-instrument REST `public/ticker` method;
+- requests two contracts concurrently per one-second batch, preserving the
+  proven conservative rate and the existing deduplicated target baselines;
+- uses the existing persistent HTTP client rather than opening another socket;
+- applies bounded backoff after three empty REST batches and keeps retry passes;
+- reports `rest_public_ticker` as the bootstrap transport;
+- leaves the research core, readiness threshold, freshness, MOS formulas,
+  databases, manual entries, and Particle Logic unchanged.
+
 ## Latest validated v20 database
 
 Latest validated database showed approximately:
@@ -259,6 +281,6 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v53 to the collector without clearing databases, run the Deribit smoke
+Deploy v54 to the collector without clearing databases, run the Deribit smoke
 test, and verify that both Bybit and Deribit contract rows reach the next
 five-minute history snapshot. Do not promote contract particles into scoring.

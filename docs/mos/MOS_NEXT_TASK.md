@@ -1,6 +1,6 @@
 # MOS_NEXT_TASK.md
 
-## Task: validate v60 Deribit deduplicated core bootstrap
+## Task: validate v61 Deribit REST ticker bootstrap
 
 ## Goal
 
@@ -15,15 +15,15 @@ one short validation window and without changing any MOS or candidate formula.
   available expiry.
 - WebSocket `incremental_ticker.<instrument>` continuously updates the complete
   core through one 240-channel subscription request.
-- A separate WebSocket calls `public/ticker` in two-request batches, at no more
-  than two requests per second, prioritizing the core and then backfilling the
-  complete discovered chain.
+- The existing persistent HTTP client calls lightweight per-instrument REST
+  `public/ticker` in two-request batches, at no more than two requests per
+  second, prioritizing the core and then backfilling the complete chain.
 - After a five-second subscription head start, the bootstrap freezes baselines
   only for stale or missing contracts. Fresh complete subscription snapshots
   are never requested again during that cycle.
-- Three consecutive empty RPC batches trigger a connection restart and another
-  pass retries only targets whose receive timestamp has not advanced beyond its
-  frozen baseline.
+- Three consecutive empty REST batches trigger a bounded five-second backoff;
+  later passes retry only targets whose receive timestamp has not advanced
+  beyond its frozen baseline.
 - The live MOS poll reads the local cache and never waits for bulk Deribit REST.
 - Observations older than five minutes are excluded.
 - Core coverage below 70% is warmup. Full-chain coverage remains diagnostic and
@@ -59,6 +59,7 @@ deribit_ws_core_full_tickers >= 0.7 * deribit_ws_core_instruments_count
 deribit_ws_chain_coverage_ratio >= 0
 deribit_ws_bootstrap_success_count > 0
 deribit_ws_bootstrap_cycle_target_count <= deribit_ws_bootstrap_target_count
+deribit_ticker_bootstrap_transport = rest_public_ticker
 ```
 
 The first smoke test may wait up to 120 seconds. The adaptive bootstrap can
@@ -87,5 +88,6 @@ Both `bybit` and `deribit` must appear. Do not clear either database.
 - full-chain backfill continues independently;
 - successful bootstrap replies increase unique fresh-full coverage rather than
   repeatedly refreshing the same first subscription block;
+- bootstrap progress is independent of temporary WebSocket close frames;
 - existing tests and Particle Logic replay tests pass;
 - no clean database is required.

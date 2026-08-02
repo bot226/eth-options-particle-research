@@ -35,12 +35,11 @@ _WS_INSTRUMENT_RETRY_SEC = 30
 _INSTRUMENT_CACHE_TTL_SEC = 15 * 60
 _WS_TICKER_CACHE_MAX_AGE_SEC = 5 * 60
 _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
-_WS_BOOTSTRAP_START_DELAY_SEC = 5.0
-_WS_BOOTSTRAP_BATCH_SIZE = 2
-_WS_BOOTSTRAP_BATCH_INTERVAL_SEC = 1.0
-_WS_BOOTSTRAP_BATCH_TIMEOUT_SEC = 15.0
-_WS_BOOTSTRAP_MAX_PASSES = 4
-_WS_BOOTSTRAP_MAX_EMPTY_BATCHES = 3
+_TICKER_BOOTSTRAP_START_DELAY_SEC = 5.0
+_TICKER_BOOTSTRAP_BATCH_SIZE = 2
+_TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC = 1.0
+_TICKER_BOOTSTRAP_MAX_PASSES = 4
+_TICKER_BOOTSTRAP_MAX_EMPTY_BATCHES = 3
 
 
 class DeribitAdapter(BaseExchangeAdapter):
@@ -624,14 +623,14 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ticker_bootstrap_cycle_target_count = 0
 
         try:
-            await asyncio.sleep(_WS_BOOTSTRAP_START_DELAY_SEC)
+            await asyncio.sleep(_TICKER_BOOTSTRAP_START_DELAY_SEC)
             refresh_baselines = self._bootstrap_refresh_baselines(
                 instrument_names
             )
             self._ticker_bootstrap_cycle_target_count = len(
                 refresh_baselines
             )
-            for pass_index in range(_WS_BOOTSTRAP_MAX_PASSES):
+            for pass_index in range(_TICKER_BOOTSTRAP_MAX_PASSES):
                 missing = [
                     name
                     for name, baseline_ts in refresh_baselines.items()
@@ -645,50 +644,28 @@ class DeribitAdapter(BaseExchangeAdapter):
                 if not missing or not self._running:
                     break
 
-                try:
-                    async with websockets.connect(
-                        DERIBIT_WS_URL,
-                        ping_interval=None,
-                        ping_timeout=None,
-                        close_timeout=5,
-                        open_timeout=10,
-                    ) as ws:
-                        empty_batches = 0
-                        for offset in range(
-                            0, len(missing), _WS_BOOTSTRAP_BATCH_SIZE
-                        ):
-                            if not self._running:
-                                break
-                            batch = missing[
-                                offset:offset + _WS_BOOTSTRAP_BATCH_SIZE
-                            ]
-                            successes = await self._bootstrap_ticker_batch(
-                                ws, batch
-                            )
-                            empty_batches = (
-                                0 if successes else empty_batches + 1
-                            )
-                            if empty_batches >= _WS_BOOTSTRAP_MAX_EMPTY_BATCHES:
-                                raise RuntimeError(
-                                    "ticker_rpc_connection_stalled"
-                                )
-                            if offset + _WS_BOOTSTRAP_BATCH_SIZE < len(missing):
-                                await asyncio.sleep(
-                                    _WS_BOOTSTRAP_BATCH_INTERVAL_SEC
-                                    * (2 if successes < len(batch) else 1)
-                                )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    self._ticker_bootstrap_error_count += 1
-                    self._ticker_bootstrap_last_error = str(exc)
-                    log.warning(
-                        "Deribit ticker bootstrap pass %d failed: %s",
-                        pass_index + 1,
-                        exc,
-                    )
-                    if pass_index + 1 < _WS_BOOTSTRAP_MAX_PASSES:
+                empty_batches = 0
+                for offset in range(
+                    0, len(missing), _TICKER_BOOTSTRAP_BATCH_SIZE
+                ):
+                    if not self._running:
+                        break
+                    batch = missing[
+                        offset:offset + _TICKER_BOOTSTRAP_BATCH_SIZE
+                    ]
+                    successes = await self._bootstrap_ticker_rest_batch(batch)
+                    empty_batches = 0 if successes else empty_batches + 1
+                    if empty_batches >= _TICKER_BOOTSTRAP_MAX_EMPTY_BATCHES:
                         await asyncio.sleep(5.0)
+                        empty_batches = 0
+                    if offset + _TICKER_BOOTSTRAP_BATCH_SIZE < len(missing):
+                        await asyncio.sleep(
+                            _TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC
+                            * (2 if successes < len(batch) else 1)
+                        )
+
+                if pass_index + 1 < _TICKER_BOOTSTRAP_MAX_PASSES:
+                    await asyncio.sleep(5.0)
 
             missing_count = sum(
                 (
@@ -708,60 +685,38 @@ class DeribitAdapter(BaseExchangeAdapter):
         finally:
             self._ticker_bootstrap_completed_ts = time.time()
 
-    async def _bootstrap_ticker_batch(
+    async def _bootstrap_ticker_rest_batch(
         self,
-        ws,
         instrument_names: list[str],
     ) -> int:
-        """Request a small batch of full public/ticker snapshots over WS."""
-        pending: dict[int, str] = {}
-        for instrument_name in instrument_names:
-            request_id = self._next_id()
-            pending[request_id] = instrument_name
-            await ws.send(json.dumps({
-                "jsonrpc": "2.0",
-                "method": "public/ticker",
-                "id": request_id,
-                "params": {"instrument_name": instrument_name},
-            }))
+        """Request lightweight per-contract public/ticker snapshots over REST."""
+        async def fetch_one(instrument_name: str) -> bool:
             self._ticker_bootstrap_request_count += 1
-
-        successes = 0
-        deadline = time.monotonic() + _WS_BOOTSTRAP_BATCH_TIMEOUT_SEC
-        while pending:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            try:
-                raw_message = await asyncio.wait_for(ws.recv(), timeout=remaining)
-            except asyncio.TimeoutError:
-                break
-            message = json.loads(raw_message)
-            request_id = message.get("id")
-            instrument_name = pending.pop(request_id, None)
-            if instrument_name is None:
-                continue
-            result = message.get("result")
-            if message.get("error") or not isinstance(result, dict):
+            result = await self._rpc_get(
+                "ticker",
+                {"instrument_name": instrument_name},
+                max_retries=1,
+            )
+            if not isinstance(result, dict):
                 self._ticker_bootstrap_error_count += 1
                 self._ticker_bootstrap_last_error = (
-                    f"ticker_rpc_error:{message.get('error', 'missing_result')}"
+                    self.last_error or "ticker_rest_missing_result"
                 )
-                continue
+                return False
             self._store_ticker_snapshot(
                 result,
                 instrument_name=instrument_name,
                 stream_message=False,
             )
             self._ticker_bootstrap_success_count += 1
-            successes += 1
+            self._ticker_bootstrap_last_error = ""
+            return True
 
-        if pending:
-            self._ticker_bootstrap_error_count += len(pending)
-            self._ticker_bootstrap_last_error = (
-                f"ticker_rpc_timeout:{len(pending)}"
-            )
-        return successes
+        results = await asyncio.gather(*(
+            fetch_one(instrument_name)
+            for instrument_name in instrument_names
+        ))
+        return sum(results)
 
     async def _ws_subscribe(
         self,
@@ -1000,8 +955,9 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_last_error": self.last_error,
             "deribit_disabled_reason": self.disabled_reason,
             "deribit_data_transport": (
-                "websocket_incremental_ticker_cache+rpc_bootstrap"
+                "websocket_incremental_ticker_cache+rest_ticker_bootstrap"
             ),
+            "deribit_ticker_bootstrap_transport": "rest_public_ticker",
             "deribit_ws_instruments_count": self._ws_instruments_count,
             "deribit_ws_core_instruments_count": core_count,
             "deribit_instrument_cache_count": len(self._instruments_cache),

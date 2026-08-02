@@ -58,8 +58,8 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-For v60 Deribit WebSocket collection, the smoke test must report after the
-deduplicated bootstrap reaches safe research-core coverage:
+For v61 Deribit collection, the smoke test must report after the REST ticker
+bootstrap reaches safe research-core coverage:
 
 ```text
 status = ok
@@ -69,7 +69,8 @@ valid_iv_count > 0
 valid_greeks_count > 0
 valid_gamma_count > 0
 collector_reused = true
-deribit_data_transport = websocket_incremental_ticker_cache+rpc_bootstrap
+deribit_data_transport = websocket_incremental_ticker_cache+rest_ticker_bootstrap
+deribit_ticker_bootstrap_transport = rest_public_ticker
 deribit_instrument_cache_count > 0
 deribit_ws_subscribed_tickers > 0
 deribit_ws_fresh_tickers > 0

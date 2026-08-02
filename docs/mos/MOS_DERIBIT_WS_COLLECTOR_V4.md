@@ -1,4 +1,4 @@
-# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6/v7/v8/v9/v10
+# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6/v7/v8/v9/v10/v11
 
 ## Why it exists
 
@@ -13,7 +13,7 @@ request could finish.
 ```text
 REST get_instruments
     -> active BTC option names
-    -> rate-limited WebSocket public/ticker bootstrap
+    -> rate-limited REST public/ticker bootstrap
     -> WebSocket incremental_ticker.<instrument>
     -> per-instrument raw ticker cache
     -> existing InstrumentNormalizer
@@ -49,9 +49,9 @@ Open:
 http://localhost:8005/api/research/deribit-smoke-test
 ```
 
-The response should show `status: ok`, positive WebSocket ticker and Greek
-counts, and
-`deribit_data_transport: websocket_incremental_ticker_cache+rpc_bootstrap`.
+The response should show `status: ok`, positive ticker and Greek counts, and
+`deribit_data_transport: websocket_incremental_ticker_cache+rest_ticker_bootstrap`, with
+`deribit_ticker_bootstrap_transport: rest_public_ticker`.
 `deribit_ws_cache_coverage_ratio` reports core readiness, while
 `deribit_ws_chain_coverage_ratio` reports full-chain backfill progress.
 
@@ -115,3 +115,12 @@ mostly duplicate refreshes of the first 100 subscription snapshots. v60 freezes
 per-contract baselines after the subscription head start, skips every already
 fresh complete ticker, and subscribes the complete 240-contract core in one
 request instead of waiting on three serialized acknowledgements.
+
+## v60 smoke-test result and v61 REST bootstrap
+
+v60 confirmed all 240 core subscriptions with zero pending channels, but the
+temporary bootstrap WebSocket closed without a close frame. It completed only
+48 requests in 116 seconds and stopped degraded at 86 unique core tickers. v61
+keeps the live subscription WebSocket and moves only the one-time full-ticker
+bootstrap to lightweight per-instrument REST `public/ticker` calls, two at a
+time through the existing persistent HTTP client.
