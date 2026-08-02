@@ -1,84 +1,70 @@
 # MOS_NEXT_TASK.md
 
-## Task: validate v53 Particle Materiality Filter v3
+## Task: validate v54 Deribit WebSocket option ticker collection
 
 ## Goal
 
-Suppress contract-level micro-noise in offline replay while retaining every raw
-contract observation and keeping live MOS unchanged.
+Restore source-level Deribit BTC option observations without blocking the MOS
+poll loop and without changing any market-structure or candidate formula.
 
-## Inputs
+## Runtime design
+
+- REST `get_instruments` discovers active BTC option contracts.
+- WebSocket `ticker.<instrument>.agg2` supplies OI, volume, IV, prices, and Greeks.
+- Subscriptions are batched and refreshed every 15 minutes.
+- The live MOS poll reads a local cache and never waits for the slow bulk REST
+  `get_book_summary_by_currency` endpoint.
+- Cache older than 30 seconds is excluded.
+- Cache coverage below 70% of discovered instruments is treated as warmup and
+  excluded from live aggregation.
+
+## Protected behavior
+
+Do not modify:
+
+- State Machine or state formulas;
+- ExecutionTimingEngine or manual entry logic;
+- SignalCluster, LiquidityVoid, RegimeTransition, or VolatilityEngine;
+- events, future labels, OHLCV, or the existing snapshots schema;
+- Particle Logic v3 scoring or materiality thresholds.
+
+## Collector validation
+
+With the backend running, call:
 
 ```text
-history.db       structural snapshots plus option_contract_snapshots
-mos_research.db  MOS context, 1m OHLCV, future context
-manifest.json    dataset provenance
+GET /api/research/deribit-smoke-test
 ```
 
-All input databases must be opened read-only.
-
-## Output
-
-One standalone `particle_shadow_v3.db` containing the v2 tables plus:
+Expected:
 
 ```text
-shadow_runs
-source_snapshots
-particle_observations
-particle_constellations
-shadow_candidates
-shadow_outcomes
-contract_observations
-particle_contract_links
-constellation_particle_links
-candidate_particle_lineage
-particle_filter_audit
+status = ok
+raw_instruments_count > 0
+raw_ws_ticker_count > 0
+valid_iv_count > 0
+valid_greeks_count > 0
+valid_gamma_count > 0
+deribit_ws_cache_age_sec < 30
 ```
 
-## New observation-only particle families
+After at least five minutes, export a dataset and verify:
 
-- contract IV rise/fall;
-- contract rolling-volume rise/fall;
-- contract delta up/down;
-- contract gamma, vega, and theta magnitude build/decay.
+```sql
+SELECT exchange, COUNT(*), COUNT(DISTINCT snapshot_id)
+FROM option_contract_snapshots
+GROUP BY exchange;
+```
 
-## Logic contract
-
-- options particles create the structural hypothesis;
-- price and synthetic flow may confirm but must not create the hypothesis;
-- movement probability and direction evidence are separate;
-- every score and blocker is stored;
-- no look-ahead is allowed when generating a constellation or candidate;
-- future OHLCV is used only by `shadow_outcomes` after the candidate exists.
-- contract-metric particles remain observation-only until validated;
-- materiality floors and the per-metric cap are stored for every snapshot;
-- candidates without option-particle lineage are forbidden.
-
-## Forbidden
-
-Do not modify or feed:
-
-- State Machine;
-- ExecutionTimingEngine;
-- SignalCluster;
-- RegimeTransitionEngine;
-- VolatilityEngine;
-- event generation;
-- future_labels;
-- live `snapshots` schema;
-- manual trading or paper-trade opening.
+Both `bybit` and `deribit` must appear. New research snapshots should include
+Deribit in `active_sources` and should not report `deribit_timeout`.
 
 ## Acceptance
 
-- source database hashes unchanged before/after replay;
-- generated database passes `PRAGMA integrity_check`;
-- replay is deterministic for the same database hashes and logic version;
-- excluded/stale source snapshots do not generate particles;
-- all shadow candidates have an explainable constellation and blockers;
-- all shadow candidates have at least one `candidate_particle_lineage` row;
-- new collector snapshots contain per-contract IV, volume, and Greeks coverage;
-- v2 and v3 have identical `contract_observations` counts on the same archive;
-- every emitted contract particle passes its recorded materiality gate;
-- emitted contract particles never exceed 48 per metric per snapshot;
-- v1 archives without contract rows still replay successfully;
-- 60/120/240-minute outcomes are stored when OHLCV coverage permits.
+- the MOS three-second poll is not delayed by Deribit REST;
+- a failed or stale Deribit stream falls back to Bybit without stale reuse;
+- WebSocket reconnect re-subscribes all active instruments;
+- expired instruments are removed from the cache;
+- normalizer preserves nested Deribit Greeks and 24-hour volume;
+- existing tests and Particle Logic replay tests pass;
+- no clean database is required.

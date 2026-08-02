@@ -5,15 +5,16 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_02_v46"
+CODE_VERSION = "research_fix_2026_08_02_v47"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v53_particle_materiality_filter_v3"
+ENGINE_PATCH_VERSION = "v54_deribit_ws_option_tickers"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
-The last collected clean-MOS baseline remains on `research_fix_2026_06_17_v43`
-with engine patch `v50_immediate_entry_candidate_snapshot`. Particle Logic v1
-is an offline shadow layer and is not connected to live MOS decisions.
+The latest collected clean-MOS baseline remains on `research_fix_2026_08_01_v45`
+with engine patch `v52_particle_contract_lineage_v2`. It is a valid Bybit-only
+baseline. Particle Logic remains an offline shadow layer and is not connected
+to live MOS decisions.
 
 ## Particle Logic shadow v1
 
@@ -44,6 +45,18 @@ is an offline shadow layer and is not connected to live MOS decisions.
 - caps each contract metric at 48 strongest changes per five-minute snapshot;
 - writes `particle_filter_audit` with all emitted and suppressed counts;
 - keeps contract particles observation-only and leaves candidate scoring intact.
+
+## Deribit WebSocket option ticker collector v4
+
+- uses REST only to discover active BTC option instruments;
+- subscribes to `ticker.<instrument>.agg2` in bounded batches;
+- reads per-contract OI, volume, IV, prices, and nested Greeks from WebSocket;
+- exposes a fresh cache to the existing three-second MOS aggregation loop;
+- refuses stale cache data after 30 seconds;
+- refreshes active instrument subscriptions every 15 minutes;
+- keeps the existing Bybit adapter and all MOS formulas unchanged;
+- keeps `PARTICLE_LOGIC_VERSION = particle_shadow_v3` because candidate scoring
+  and offline replay logic are unchanged.
 
 ## Latest validated v20 database
 
@@ -119,7 +132,6 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Replay the same v45 archive with Particle Logic v3 and verify that raw contract
-counts remain identical while particle and lineage storage falls materially.
-Do not promote contract particles into scoring until several regimes are
-represented.
+Deploy v47 to the collector without clearing databases, run the Deribit smoke
+test, and verify that both Bybit and Deribit contract rows reach the next
+five-minute history snapshot. Do not promote contract particles into scoring.

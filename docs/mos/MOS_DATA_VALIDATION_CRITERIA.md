@@ -58,6 +58,31 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
+For v54 Deribit WebSocket collection, the smoke test must report:
+
+```text
+status = ok
+raw_instruments_count > 0
+raw_ws_ticker_count > 0
+valid_iv_count > 0
+valid_greeks_count > 0
+valid_gamma_count > 0
+deribit_data_transport = websocket_ticker_cache
+```
+
+After the next five-minute structural snapshot, verify that source-level rows
+exist for both exchanges:
+
+```sql
+SELECT exchange, COUNT(*) AS rows,
+       COUNT(DISTINCT snapshot_id) AS snapshots,
+       SUM(mark_iv IS NOT NULL AND mark_iv > 0) AS valid_iv,
+       SUM(delta IS NOT NULL AND gamma IS NOT NULL
+           AND vega IS NOT NULL AND theta IS NOT NULL) AS valid_greeks
+FROM option_contract_snapshots
+GROUP BY exchange;
+```
+
 But for Research Layer, main requirement is `mos_research.db + wal + shm`.
 
 ## Required runtime version columns

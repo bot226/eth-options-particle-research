@@ -78,9 +78,9 @@ Update only:
 Current development branch:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_02_v46"
+CODE_VERSION = "research_fix_2026_08_02_v47"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v53_particle_materiality_filter_v3"
+ENGINE_PATCH_VERSION = "v54_deribit_ws_option_tickers"
 ```
 
 Do not create duplicate version files.

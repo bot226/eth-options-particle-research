@@ -319,12 +319,19 @@ def _normalize_deribit_ticker(raw: dict) -> Optional[dict]:
     if parsed is None:
         return None
 
+    nested_greeks = raw.get("greeks")
+    if not isinstance(nested_greeks, dict):
+        nested_greeks = {}
+    stats = raw.get("stats")
+    if not isinstance(stats, dict):
+        stats = {}
+
     iv = InstrumentNormalizer.normalize_iv("deribit", _safe_float(raw.get("mark_iv")))
     greeks = InstrumentNormalizer.normalize_greeks("deribit", parsed.opt_type, {
-        "delta": _safe_float(raw.get("delta")),
-        "gamma": _safe_float(raw.get("gamma")),
-        "vega": _safe_float(raw.get("vega")),
-        "theta": _safe_float(raw.get("theta")),
+        "delta": _safe_float(raw.get("delta", nested_greeks.get("delta"))),
+        "gamma": _safe_float(raw.get("gamma", nested_greeks.get("gamma"))),
+        "vega": _safe_float(raw.get("vega", nested_greeks.get("vega"))),
+        "theta": _safe_float(raw.get("theta", nested_greeks.get("theta"))),
     })
 
     return {
@@ -335,7 +342,9 @@ def _normalize_deribit_ticker(raw: dict) -> Optional[dict]:
         "strike": parsed.strike,
         "type": parsed.opt_type,
         "oi": _safe_float(raw.get("open_interest")),
-        "volume": _safe_float(raw.get("volume_24h", raw.get("volume"))),
+        "volume": _safe_float(
+            raw.get("volume_24h", raw.get("volume", stats.get("volume")))
+        ),
         "markIv": iv,
         "bidIv": InstrumentNormalizer.normalize_iv("deribit", _safe_float(raw.get("bid_iv"))),
         "askIv": InstrumentNormalizer.normalize_iv("deribit", _safe_float(raw.get("ask_iv"))),
@@ -344,9 +353,9 @@ def _normalize_deribit_ticker(raw: dict) -> Optional[dict]:
         "vega": greeks["vega"],
         "theta": greeks["theta"],
         "markPrice": _safe_float(raw.get("mark_price")),
-        "lastPrice": _safe_float(raw.get("last")),
-        "bidPrice": _safe_float(raw.get("bid_price")),
-        "askPrice": _safe_float(raw.get("ask_price")),
+        "lastPrice": _safe_float(raw.get("last", raw.get("last_price"))),
+        "bidPrice": _safe_float(raw.get("bid_price", raw.get("best_bid_price"))),
+        "askPrice": _safe_float(raw.get("ask_price", raw.get("best_ask_price"))),
         "underlyingPrice": _safe_float(raw.get("underlying_price")),
     }
 

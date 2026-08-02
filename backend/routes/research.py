@@ -2327,8 +2327,9 @@ async def clear_research_data():
 
 @router.get("/deribit-smoke-test")
 async def deribit_smoke_test():
-    """Standalone Deribit adapter smoke test command."""
+    """Standalone Deribit discovery and WebSocket ticker smoke test."""
     from api.deribit_adapter import DeribitAdapter
+    import asyncio
     import time
     
     adapter = DeribitAdapter()
@@ -2337,26 +2338,39 @@ async def deribit_smoke_test():
     try:
         t0 = time.time()
         instruments = await adapter.fetch_instruments()
+        cache_ready = await adapter.wait_for_option_tickers(timeout=20.0)
+        if cache_ready:
+            await asyncio.sleep(3.0)
         options = await adapter.fetch_option_tickers()
         t1 = time.time()
         
         sample_names = [i.get("instrument_name") for i in instruments[:3]]
         sample_keys = [o.get("instrument_name") for o in options[:3]]
-        valid_greeks = sum(1 for o in options if o.get("delta") is not None)
+        valid_greeks = sum(
+            1 for o in options
+            if isinstance(o.get("greeks"), dict)
+            and o["greeks"].get("delta") is not None
+        )
         valid_iv = sum(1 for o in options if o.get("mark_iv") is not None and o.get("mark_iv", 0) > 0)
-        valid_gamma = sum(1 for o in options if o.get("gamma") is not None)
+        valid_gamma = sum(
+            1 for o in options
+            if isinstance(o.get("greeks"), dict)
+            and o["greeks"].get("gamma") is not None
+        )
         calls_count = sum(1 for o in options if o.get("instrument_name", "").endswith("-C"))
         puts_count = sum(1 for o in options if o.get("instrument_name", "").endswith("-P"))
         expiries = set(o.get("instrument_name", "").split("-")[1] for o in options if "-" in o.get("instrument_name", ""))
         strikes = set(o.get("instrument_name", "").split("-")[2] for o in options if len(o.get("instrument_name", "").split("-")) > 2)
         
         return {
-            "status": "ok",
+            "status": "ok" if options and valid_greeks else "degraded",
             "request_attempted": True,
-            "method": "REST API",
-            "endpoint_used": "get_instruments & get_book_summary_by_currency",
+            "method": "REST discovery + WebSocket ticker cache",
+            "endpoint_used": "get_instruments & ticker.<instrument>.agg2",
             "raw_instruments_count": len(instruments),
-            "raw_book_summary_count": len(options),
+            "raw_book_summary_count": 0,
+            "raw_ws_ticker_count": len(options),
+            "ws_cache_ready": cache_ready,
             "sample_instrument_names": sample_names,
             "sample_ticker_keys": sample_keys,
             "parsed_options_count": len(options),
@@ -2376,10 +2390,12 @@ async def deribit_smoke_test():
         return {
             "status": "error",
             "request_attempted": True,
-            "method": "REST API",
-            "endpoint_used": "get_instruments & get_book_summary_by_currency",
+            "method": "REST discovery + WebSocket ticker cache",
+            "endpoint_used": "get_instruments & ticker.<instrument>.agg2",
             "raw_instruments_count": 0,
             "raw_book_summary_count": 0,
+            "raw_ws_ticker_count": 0,
+            "ws_cache_ready": False,
             "sample_instrument_names": [],
             "sample_ticker_keys": [],
             "parsed_options_count": 0,
