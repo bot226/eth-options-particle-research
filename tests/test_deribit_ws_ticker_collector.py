@@ -17,11 +17,19 @@ from engine.instrument_normalizer import InstrumentNormalizer
 
 
 class _FakeWebSocket:
-    def __init__(self):
+    def __init__(self, adapter=None):
         self.messages = []
+        self.adapter = adapter
 
     async def send(self, message):
-        self.messages.append(json.loads(message))
+        parsed = json.loads(message)
+        self.messages.append(parsed)
+        if self.adapter is not None:
+            await self.adapter._handle_ws_message({
+                "jsonrpc": "2.0",
+                "id": parsed["id"],
+                "result": parsed["params"]["channels"],
+            })
 
 
 class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
@@ -56,7 +64,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         await self.adapter._handle_ws_message({
             "method": "subscription",
             "params": {
-                "channel": "ticker.BTC-14AUG26-65000-C.agg2",
+                "channel": "incremental_ticker.BTC-14AUG26-65000-C",
                 "data": raw_ticker,
             },
         })
@@ -69,8 +77,45 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.adapter.get_total_volume(), 17.25)
         self.assertTrue(await self.adapter.wait_for_option_tickers(timeout=0.01))
         diagnostics = self.adapter.get_diagnostics()
-        self.assertEqual(diagnostics["deribit_data_transport"], "websocket_ticker_cache")
+        self.assertEqual(
+            diagnostics["deribit_data_transport"],
+            "websocket_incremental_ticker_cache",
+        )
         self.assertEqual(diagnostics["deribit_ws_cached_tickers"], 1)
+        self.assertEqual(diagnostics["deribit_ws_fresh_tickers"], 1)
+
+    async def test_incremental_ticker_merges_partial_nested_updates(self):
+        instrument_name = "BTC-14AUG26-65000-C"
+        channel = f"incremental_ticker.{instrument_name}"
+        await self.adapter._handle_ws_message({
+            "method": "subscription",
+            "params": {
+                "channel": channel,
+                "data": {
+                    "instrument_name": instrument_name,
+                    "mark_iv": 55.2,
+                    "stats": {"volume": 17.25},
+                    "greeks": {"delta": 0.42, "gamma": 0.000031},
+                },
+            },
+        })
+        await self.adapter._handle_ws_message({
+            "method": "subscription",
+            "params": {
+                "channel": channel,
+                "data": {
+                    "instrument_name": instrument_name,
+                    "mark_iv": 56.0,
+                    "greeks": {"delta": 0.45},
+                },
+            },
+        })
+
+        ticker = self.adapter.get_cached_tickers()[0]
+        self.assertEqual(ticker["mark_iv"], 56.0)
+        self.assertEqual(ticker["stats"]["volume"], 17.25)
+        self.assertEqual(ticker["greeks"]["delta"], 0.45)
+        self.assertEqual(ticker["greeks"]["gamma"], 0.000031)
 
     async def test_concurrent_instrument_discovery_uses_one_rest_request(self):
         instruments = [
@@ -119,7 +164,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.adapter._ticker_cache_by_instrument["BTC-3AUG26-40000-P"] = {
             "instrument_name": "BTC-3AUG26-40000-P"
         }
-        websocket = _FakeWebSocket()
+        websocket = _FakeWebSocket(self.adapter)
 
         with patch.object(
             self.adapter,
@@ -138,34 +183,23 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             for channel in message["params"]["channels"]
         }
         self.assertEqual(len(subscribed), 866)
-        self.assertEqual(len(self.adapter._subscribed_ticker_channels), 0)
-        self.assertEqual(
-            sum(
-                len(channels)
-                for channels in self.adapter._pending_ticker_channels.values()
-            ),
-            866,
-        )
+        self.assertTrue(all(
+            channel.startswith("incremental_ticker.BTC-")
+            for channel in subscribed
+        ))
+        self.assertEqual(len(self.adapter._subscribed_ticker_channels), 866)
+        self.assertEqual(self.adapter._pending_ticker_channels, {})
         self.assertNotIn(
             "BTC-3AUG26-40000-P",
             self.adapter._ticker_cache_by_instrument,
         )
-
-        for message in websocket.messages:
-            await self.adapter._handle_ws_message({
-                "jsonrpc": "2.0",
-                "id": message["id"],
-                "result": message["params"]["channels"],
-            })
-
-        self.assertEqual(len(self.adapter._subscribed_ticker_channels), 866)
-        self.assertEqual(self.adapter._pending_ticker_channels, {})
-
     async def test_stale_ws_cache_is_not_returned_to_live_mos(self):
-        self.adapter._ticker_cache_by_instrument["BTC-14AUG26-65000-P"] = {
-            "instrument_name": "BTC-14AUG26-65000-P"
+        name = "BTC-14AUG26-65000-P"
+        self.adapter._ticker_cache_by_instrument[name] = {
+            "instrument_name": name
         }
-        self.adapter._tickers_cache_ts = time.time() - 31
+        self.adapter._ticker_received_ts_by_instrument[name] = time.time() - 91
+        self.adapter._tickers_cache_ts = time.time() - 91
 
         self.assertEqual(await self.adapter.fetch_option_tickers(), [])
         self.assertEqual(
@@ -180,6 +214,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             self.adapter._ticker_cache_by_instrument[name] = {
                 "instrument_name": name
             }
+            self.adapter._ticker_received_ts_by_instrument[name] = time.time()
         self.adapter._tickers_cache_ts = time.time()
 
         self.assertEqual(await self.adapter.fetch_option_tickers(), [])
@@ -190,9 +225,9 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ws_rpc_error_requests_subscription_retry(self):
         self.adapter._subscribed_ticker_channels.add(
-            "ticker.BTC-14AUG26-65000-C.agg2"
+            "incremental_ticker.BTC-14AUG26-65000-C"
         )
-        failed_channel = "ticker.BTC-14AUG26-66000-C.agg2"
+        failed_channel = "incremental_ticker.BTC-14AUG26-66000-C"
         self.adapter._pending_ticker_channels[7] = {failed_channel}
 
         await self.adapter._handle_ws_message({
@@ -203,7 +238,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             self.adapter._subscribed_ticker_channels,
-            {"ticker.BTC-14AUG26-65000-C.agg2"},
+            {"incremental_ticker.BTC-14AUG26-65000-C"},
         )
         self.assertNotIn(7, self.adapter._pending_ticker_channels)
         self.assertTrue(self.adapter._ws_subscription_retry_event.is_set())
@@ -212,8 +247,8 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def test_partial_subscription_ack_retries_only_missing_channels(self):
         websocket = _FakeWebSocket()
         channels = [
-            "ticker.BTC-14AUG26-65000-C.agg2",
-            "ticker.BTC-14AUG26-66000-C.agg2",
+            "incremental_ticker.BTC-14AUG26-65000-C",
+            "incremental_ticker.BTC-14AUG26-66000-C",
         ]
         request_id = await self.adapter._ws_subscribe(
             websocket,
@@ -226,7 +261,12 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             "id": request_id,
             "result": channels[:1],
         })
+        acknowledged = await self.adapter._wait_for_subscription_ack(
+            request_id,
+            timeout=0.01,
+        )
 
+        self.assertFalse(acknowledged)
         self.assertEqual(
             self.adapter._subscribed_ticker_channels,
             {channels[0]},

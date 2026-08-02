@@ -25,13 +25,14 @@ from config import (
 
 log = logging.getLogger(__name__)
 
-_WS_TICKER_INTERVAL = "agg2"
+_WS_TICKER_CHANNEL_PREFIX = "incremental_ticker."
 _WS_SUBSCRIBE_BATCH_SIZE = 500
 _WS_SUBSCRIBE_BATCH_DELAY_SEC = 0.35
+_WS_SUBSCRIBE_ACK_TIMEOUT_SEC = 10.0
 _WS_INSTRUMENT_REFRESH_SEC = 15 * 60
 _WS_INSTRUMENT_RETRY_SEC = 30
 _INSTRUMENT_CACHE_TTL_SEC = 15 * 60
-_WS_TICKER_CACHE_MAX_AGE_SEC = 30
+_WS_TICKER_CACHE_MAX_AGE_SEC = 90
 _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
 
 
@@ -48,11 +49,13 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_task: Optional[asyncio.Task] = None
         self._tickers_cache: list[dict] = []
         self._ticker_cache_by_instrument: dict[str, dict] = {}
+        self._ticker_received_ts_by_instrument: dict[str, float] = {}
         self._ticker_cache_ready = asyncio.Event()
         self._ws_subscription_retry_event = asyncio.Event()
         self._tickers_cache_ts: float = 0.0
         self._subscribed_ticker_channels: set[str] = set()
         self._pending_ticker_channels: dict[int, set[str]] = {}
+        self._subscription_ack_waiters: dict[int, asyncio.Future] = {}
         self._instrument_discovery_lock = asyncio.Lock()
         self._instruments_cache: list[dict] = []
         self._instruments_cache_ts: float = 0.0
@@ -181,7 +184,10 @@ class DeribitAdapter(BaseExchangeAdapter):
         collector host.  The hot MOS poll path is now cache-only and therefore
         remains non-blocking.  REST is retained only for instrument discovery.
         """
-        if not self._ticker_cache_by_instrument:
+        tickers = self._fresh_tickers()
+        if not tickers:
+            if self._ticker_cache_by_instrument:
+                self.disabled_reason = "deribit_ws_ticker_cache_stale"
             return []
 
         if not self._has_sufficient_ticker_coverage():
@@ -194,7 +200,6 @@ class DeribitAdapter(BaseExchangeAdapter):
             self.disabled_reason = "deribit_ws_ticker_cache_stale"
             return []
 
-        tickers = list(self._ticker_cache_by_instrument.values())
         self._tickers_cache = tickers
 
         total_oi = 0.0
@@ -212,10 +217,8 @@ class DeribitAdapter(BaseExchangeAdapter):
         return tickers
 
     def get_cached_tickers(self) -> list[dict]:
-        """Return cached tickers if available, regardless of age."""
-        if self._ticker_cache_by_instrument:
-            return list(self._ticker_cache_by_instrument.values())
-        return self._tickers_cache or []
+        """Return only fresh cached tickers; stale data is never reused."""
+        return self._fresh_tickers()
 
     async def wait_for_option_tickers(self, timeout: float = 20.0) -> bool:
         """Wait until the WebSocket ticker cache has safe chain coverage."""
@@ -234,7 +237,7 @@ class DeribitAdapter(BaseExchangeAdapter):
 
     def _has_sufficient_ticker_coverage(self) -> bool:
         """Prevent a partially warmed Deribit chain from entering aggregation."""
-        cached_count = len(self._ticker_cache_by_instrument)
+        cached_count = len(self._fresh_tickers())
         if cached_count == 0:
             return False
         if self._ws_instruments_count <= 0:
@@ -243,6 +246,17 @@ class DeribitAdapter(BaseExchangeAdapter):
             cached_count / self._ws_instruments_count
             >= _WS_MIN_CACHE_COVERAGE_RATIO
         )
+
+    def _fresh_tickers(self) -> list[dict]:
+        """Return per-instrument snapshots refreshed within the safe window."""
+        now = time.time()
+        return [
+            ticker
+            for instrument_name, ticker in self._ticker_cache_by_instrument.items()
+            if now - self._ticker_received_ts_by_instrument.get(
+                instrument_name, 0.0
+            ) <= _WS_TICKER_CACHE_MAX_AGE_SEC
+        ]
 
     async def fetch_spot_price(self) -> Optional[float]:
         """Fetch BTC index price from Deribit."""
@@ -274,6 +288,10 @@ class DeribitAdapter(BaseExchangeAdapter):
                     self.health.ws_connected = True
                     self._subscribed_ticker_channels.clear()
                     self._pending_ticker_channels.clear()
+                    for waiter in self._subscription_ack_waiters.values():
+                        if not waiter.done():
+                            waiter.cancel()
+                    self._subscription_ack_waiters.clear()
                     self._ws_subscription_retry_event.clear()
                     log.info("Deribit WS connected")
 
@@ -365,9 +383,10 @@ class DeribitAdapter(BaseExchangeAdapter):
         expired_names = set(self._ticker_cache_by_instrument) - active_names
         for instrument_name in expired_names:
             self._ticker_cache_by_instrument.pop(instrument_name, None)
+            self._ticker_received_ts_by_instrument.pop(instrument_name, None)
 
         desired_channels = {
-            f"ticker.{name}.{_WS_TICKER_INTERVAL}"
+            f"{_WS_TICKER_CHANNEL_PREFIX}{name}"
             for name in instrument_names
         }
         missing_channels = sorted(
@@ -383,16 +402,21 @@ class DeribitAdapter(BaseExchangeAdapter):
             missing_channels[offset:offset + _WS_SUBSCRIBE_BATCH_SIZE]
             for offset in range(0, len(missing_channels), _WS_SUBSCRIBE_BATCH_SIZE)
         ]
+        self._ws_last_subscription_refresh_ts = time.time()
         for batch_index, batch in enumerate(batches):
             if batch_index > 0:
                 await asyncio.sleep(_WS_SUBSCRIBE_BATCH_DELAY_SEC)
-            await self._ws_subscribe(
+            request_id = await self._ws_subscribe(
                 ws,
                 batch,
                 track_ticker_channels=True,
             )
+            if request_id is None or not await self._wait_for_subscription_ack(
+                request_id,
+                timeout=_WS_SUBSCRIBE_ACK_TIMEOUT_SEC,
+            ):
+                return False
 
-        self._ws_last_subscription_refresh_ts = time.time()
         if missing_channels:
             log.info(
                 "Deribit WS option subscriptions added=%d total=%d",
@@ -422,13 +446,41 @@ class DeribitAdapter(BaseExchangeAdapter):
         })
         if track_ticker_channels:
             self._pending_ticker_channels[request_id] = set(channels)
+            self._subscription_ack_waiters[request_id] = (
+                asyncio.get_running_loop().create_future()
+            )
         try:
             await ws.send(msg)
         except Exception:
             self._pending_ticker_channels.pop(request_id, None)
+            waiter = self._subscription_ack_waiters.pop(request_id, None)
+            if waiter is not None and not waiter.done():
+                waiter.cancel()
             raise
         log.info("Deribit WS subscription request: %d channels", len(channels))
         return request_id
+
+    async def _wait_for_subscription_ack(
+        self,
+        request_id: int,
+        *,
+        timeout: float,
+    ) -> bool:
+        """Wait for one subscription response before sending the next batch."""
+        waiter = self._subscription_ack_waiters.get(request_id)
+        if waiter is None:
+            return False
+        try:
+            return bool(await asyncio.wait_for(waiter, timeout=timeout))
+        except asyncio.TimeoutError:
+            pending_count = len(
+                self._pending_ticker_channels.pop(request_id, set())
+            )
+            self.last_error = f"ws_subscription_ack_timeout:{pending_count}"
+            self.last_error_ts = time.time()
+            return False
+        finally:
+            self._subscription_ack_waiters.pop(request_id, None)
 
     async def _handle_ws_message(self, msg: dict):
         """Handle incoming WS message (JSON-RPC notification)."""
@@ -436,6 +488,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         pending_channels = self._pending_ticker_channels.pop(
             request_id, set()
         )
+        ack_waiter = self._subscription_ack_waiters.get(request_id)
 
         if msg.get("error"):
             error = msg.get("error")
@@ -443,6 +496,8 @@ class DeribitAdapter(BaseExchangeAdapter):
             self.last_error = f"ws_rpc_error:{error}"
             self.last_error_ts = time.time()
             self._ws_subscription_retry_event.set()
+            if ack_waiter is not None and not ack_waiter.done():
+                ack_waiter.set_result(False)
             log.warning("Deribit WS RPC error: %s", error)
             return
 
@@ -464,6 +519,8 @@ class DeribitAdapter(BaseExchangeAdapter):
                 )
                 self.last_error_ts = time.time()
                 self._ws_subscription_retry_event.set()
+            if ack_waiter is not None and not ack_waiter.done():
+                ack_waiter.set_result(not missing_ack)
             return
 
         # Deribit WS sends notifications with method="subscription"
@@ -485,21 +542,34 @@ class DeribitAdapter(BaseExchangeAdapter):
                 )
             return
 
-        if channel.startswith("ticker.") and channel.endswith(
-            f".{_WS_TICKER_INTERVAL}"
-        ):
+        if channel.startswith(_WS_TICKER_CHANNEL_PREFIX):
             if not isinstance(data, dict):
                 return
             instrument_name = str(data.get("instrument_name", ""))
             if not instrument_name:
-                instrument_name = channel[len("ticker."):].rsplit(".", 1)[0]
+                instrument_name = channel[len(_WS_TICKER_CHANNEL_PREFIX):]
             if not instrument_name.startswith("BTC-"):
                 return
 
-            ticker = dict(data)
+            previous_ticker = self._ticker_cache_by_instrument.get(
+                instrument_name, {}
+            )
+            ticker = dict(previous_ticker)
+            ticker.update(data)
+            for nested_key in ("stats", "greeks"):
+                previous_nested = previous_ticker.get(nested_key)
+                current_nested = data.get(nested_key)
+                if isinstance(previous_nested, dict) and isinstance(
+                    current_nested, dict
+                ):
+                    ticker[nested_key] = {
+                        **previous_nested,
+                        **current_nested,
+                    }
             ticker["instrument_name"] = instrument_name
             now = time.time()
             self._ticker_cache_by_instrument[instrument_name] = ticker
+            self._ticker_received_ts_by_instrument[instrument_name] = now
             self._tickers_cache_ts = now
             self._ws_last_ticker_ts = now
             self._ws_ticker_message_count += 1
@@ -534,7 +604,7 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_last_error_ts": self.last_error_ts,
             "deribit_last_error": self.last_error,
             "deribit_disabled_reason": self.disabled_reason,
-            "deribit_data_transport": "websocket_ticker_cache",
+            "deribit_data_transport": "websocket_incremental_ticker_cache",
             "deribit_ws_instruments_count": self._ws_instruments_count,
             "deribit_instrument_cache_count": len(self._instruments_cache),
             "deribit_instrument_cache_age_sec": (
@@ -551,8 +621,9 @@ class DeribitAdapter(BaseExchangeAdapter):
                 for channels in self._pending_ticker_channels.values()
             ),
             "deribit_ws_cached_tickers": len(self._ticker_cache_by_instrument),
+            "deribit_ws_fresh_tickers": len(self._fresh_tickers()),
             "deribit_ws_cache_coverage_ratio": round(
-                len(self._ticker_cache_by_instrument) / self._ws_instruments_count,
+                len(self._fresh_tickers()) / self._ws_instruments_count,
                 6,
             ) if self._ws_instruments_count > 0 else 0.0,
             "deribit_ws_min_cache_coverage_ratio": _WS_MIN_CACHE_COVERAGE_RATIO,

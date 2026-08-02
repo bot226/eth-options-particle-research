@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_02_v49"
+CODE_VERSION = "research_fix_2026_08_03_v50"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v56_deribit_instrument_discovery_singleflight"
+ENGINE_PATCH_VERSION = "v57_deribit_incremental_ticker_snapshots"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -46,13 +46,13 @@ to live MOS decisions.
 - writes `particle_filter_audit` with all emitted and suppressed counts;
 - keeps contract particles observation-only and leaves candidate scoring intact.
 
-## Deribit WebSocket option ticker collector v4
+## Deribit WebSocket option ticker collector v4/v7
 
 - uses REST only to discover active BTC option instruments;
-- subscribes to `ticker.<instrument>.agg2` in bounded batches;
+- subscribes to `incremental_ticker.<instrument>` in bounded batches;
 - reads per-contract OI, volume, IV, prices, and nested Greeks from WebSocket;
 - exposes a fresh cache to the existing three-second MOS aggregation loop;
-- refuses stale cache data after 30 seconds;
+- refuses per-contract cache data older than 90 seconds;
 - refreshes active instrument subscriptions every 15 minutes;
 - keeps the existing Bybit adapter and all MOS formulas unchanged;
 - keeps `PARTICLE_LOGIC_VERSION = particle_shadow_v3` because candidate scoring
@@ -93,6 +93,25 @@ v56 therefore:
 - exposes instrument cache count and age in diagnostics;
 - leaves subscription acknowledgement, cache coverage, MOS formulas, and
   Particle Logic scoring unchanged.
+
+## Deribit initial ticker snapshots v7
+
+The v56 smoke test proved that discovery and the first 500-channel subscription
+worked: 866 instruments were cached, 500 channels were confirmed, and ticker
+messages arrived. However, `ticker.<instrument>.agg2` emitted only 26 updates
+for contracts that changed during the smoke-test window, so cache coverage
+remained about 3% and the second batch was still pending.
+
+v57 therefore:
+
+- uses `incremental_ticker.<instrument>`, whose first notification is a full
+  ticker snapshot and later notifications contain changed fields;
+- waits for each subscription acknowledgement before sending the next batch;
+- deep-merges partial `stats` and `greeks` updates into each contract snapshot;
+- tracks freshness per contract and excludes observations older than 90 seconds;
+- exposes fresh-ticker count separately from total cached ticker count;
+- leaves normalization, MOS formulas, databases, candidate scoring, and
+  Particle Logic unchanged.
 
 ## Latest validated v20 database
 
@@ -168,6 +187,6 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v49 to the collector without clearing databases, run the Deribit smoke
+Deploy v50 to the collector without clearing databases, run the Deribit smoke
 test, and verify that both Bybit and Deribit contract rows reach the next
 five-minute history snapshot. Do not promote contract particles into scoring.

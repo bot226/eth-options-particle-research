@@ -2338,7 +2338,7 @@ async def deribit_smoke_test():
         t0 = time.time()
         instruments = await adapter.fetch_instruments()
         await adapter.start()
-        cache_ready = await adapter.wait_for_option_tickers(timeout=20.0)
+        cache_ready = await adapter.wait_for_option_tickers(timeout=30.0)
         if cache_ready:
             await asyncio.sleep(3.0)
         options = await adapter.fetch_option_tickers()
@@ -2366,7 +2366,7 @@ async def deribit_smoke_test():
             "status": "ok" if options and valid_greeks else "degraded",
             "request_attempted": True,
             "method": "REST discovery + WebSocket ticker cache",
-            "endpoint_used": "get_instruments & ticker.<instrument>.agg2",
+            "endpoint_used": "get_instruments & incremental_ticker.<instrument>",
             "raw_instruments_count": len(instruments),
             "raw_book_summary_count": 0,
             "raw_ws_ticker_count": len(options),
@@ -2391,7 +2391,7 @@ async def deribit_smoke_test():
             "status": "error",
             "request_attempted": True,
             "method": "REST discovery + WebSocket ticker cache",
-            "endpoint_used": "get_instruments & ticker.<instrument>.agg2",
+            "endpoint_used": "get_instruments & incremental_ticker.<instrument>",
             "raw_instruments_count": 0,
             "raw_book_summary_count": 0,
             "raw_ws_ticker_count": 0,

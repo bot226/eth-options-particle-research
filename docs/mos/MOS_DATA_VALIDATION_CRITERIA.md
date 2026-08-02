@@ -58,7 +58,7 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-For v56 Deribit WebSocket collection, the smoke test must report:
+For v57 Deribit WebSocket collection, the smoke test must report:
 
 ```text
 status = ok
@@ -67,9 +67,11 @@ raw_ws_ticker_count > 0
 valid_iv_count > 0
 valid_greeks_count > 0
 valid_gamma_count > 0
-deribit_data_transport = websocket_ticker_cache
+deribit_data_transport = websocket_incremental_ticker_cache
 deribit_instrument_cache_count > 0
 deribit_ws_subscribed_tickers > 0
+deribit_ws_fresh_tickers > 0
+deribit_ws_cache_coverage_ratio >= 0.7
 deribit_ws_pending_subscription_requests = 0
 deribit_ws_pending_tickers = 0
 ```
