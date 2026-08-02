@@ -101,6 +101,7 @@ def _summary(connection: sqlite3.Connection, run_id: str) -> dict[str, Any]:
         "source_snapshots": "SELECT COUNT(*) FROM source_snapshots WHERE run_id = ?",
         "contract_observations": "SELECT COUNT(*) FROM contract_observations WHERE run_id = ?",
         "particle_observations": "SELECT COUNT(*) FROM particle_observations WHERE run_id = ?",
+        "particle_filter_audit": "SELECT COUNT(*) FROM particle_filter_audit WHERE run_id = ?",
         "particle_contract_links": """
             SELECT COUNT(*) FROM particle_contract_links
             WHERE particle_id IN (
@@ -165,6 +166,29 @@ def _summary(connection: sqlite3.Connection, run_id: str) -> dict[str, Any]:
                 (run_id,),
             ).fetchone()
         ),
+        "materiality_filter": [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT metric_name,
+                       SUM(observed_changes) AS observed_changes,
+                       SUM(material_changes) AS material_changes,
+                       SUM(emitted_changes) AS emitted_changes,
+                       SUM(suppressed_below_threshold)
+                           AS suppressed_below_threshold,
+                       SUM(suppressed_by_cap) AS suppressed_by_cap,
+                       MIN(absolute_floor) AS absolute_floor,
+                       MIN(relative_floor) AS relative_floor,
+                       MAX(max_particles_per_snapshot)
+                           AS max_particles_per_snapshot
+                FROM particle_filter_audit
+                WHERE run_id = ?
+                GROUP BY metric_name
+                ORDER BY metric_name
+                """,
+                (run_id,),
+            )
+        ],
         "particle_types": [
             dict(row)
             for row in connection.execute(
@@ -293,13 +317,14 @@ def run_replay(
             _check_database(path)
         history_hash_before = _sha256(history_path)
         research_hash_before = _sha256(research_path)
+        effective_config = config or ExtractionConfig()
+        config_json = json.dumps(effective_config.__dict__, sort_keys=True)
         run_id = stable_id(
             history_hash_before,
             research_hash_before,
             PARTICLE_LOGIC_VERSION,
+            config_json,
         )
-        effective_config = config or ExtractionConfig()
-        config_json = json.dumps(effective_config.__dict__, sort_keys=True)
 
         connection = initialize_database(temporary_output)
         try:

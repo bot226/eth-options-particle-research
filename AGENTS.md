@@ -32,9 +32,9 @@ Do **not** turn MOS into a buy/sell signal dashboard.
 ## Current stable Research Layer version
 
 ```python
-CODE_VERSION = "research_fix_2026_08_01_v45"
+CODE_VERSION = "research_fix_2026_08_02_v46"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v52_particle_contract_lineage_v2"
+ENGINE_PATCH_VERSION = "v53_particle_materiality_filter_v3"
 ```
 
 ## Known working components

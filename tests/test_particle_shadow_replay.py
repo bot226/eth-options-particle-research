@@ -7,6 +7,7 @@ from pathlib import Path
 
 from backend.engine.history_db import HistoryDB
 from research.particle_shadow.common import parse_contract
+from research.particle_shadow.extractor import ExtractionConfig
 from research.particle_shadow.replay import ParticleReplayError, run_replay
 
 
@@ -222,6 +223,10 @@ class ParticleShadowReplayTest(unittest.TestCase):
         self.assertEqual((deribit.expiry, deribit.strike, deribit.option_type), ("31JUL26", 120000.0, "P"))
         self.assertIsNone(parse_contract("invalid"))
 
+    def test_materiality_config_rejects_non_positive_cap(self):
+        with self.assertRaises(ValueError):
+            ExtractionConfig(max_contract_particles_per_metric_per_snapshot=0)
+
     def test_replay_is_read_only_and_produces_explainable_shadow_database(self):
         before = (file_hash(self.history_db), file_hash(self.research_db))
         output = self.root / "particle_shadow.db"
@@ -234,6 +239,7 @@ class ParticleShadowReplayTest(unittest.TestCase):
         self.assertEqual(summary["counts"]["contract_observations"], 8)
         self.assertGreater(summary["counts"]["particle_observations"], 0)
         self.assertGreater(summary["counts"]["particle_contract_links"], 0)
+        self.assertGreater(summary["counts"]["particle_filter_audit"], 0)
         self.assertGreater(summary["counts"]["particle_constellations"], 0)
         self.assertGreater(summary["counts"]["shadow_candidates"], 0)
         self.assertTrue(output.with_suffix(".summary.json").is_file())
@@ -284,6 +290,27 @@ class ParticleShadowReplayTest(unittest.TestCase):
                 ).fetchone()[0],
                 0,
             )
+            self.assertGreater(
+                connection.execute(
+                    "SELECT SUM(suppressed_below_threshold) "
+                    "FROM particle_filter_audit"
+                ).fetchone()[0],
+                0,
+            )
+            self.assertLessEqual(
+                connection.execute(
+                    "SELECT MAX(emitted_changes) FROM particle_filter_audit"
+                ).fetchone()[0],
+                48,
+            )
+            self.assertGreater(
+                connection.execute(
+                    "SELECT COUNT(*) FROM particle_observations "
+                    "WHERE particle_type LIKE 'CONTRACT_%' "
+                    "AND features_json LIKE '%materiality_filter%'"
+                ).fetchone()[0],
+                0,
+            )
             self.assertEqual(
                 connection.execute(
                     """
@@ -320,6 +347,30 @@ class ParticleShadowReplayTest(unittest.TestCase):
         _, summary = run_replay(self.dataset, output)
         self.assertEqual(summary["counts"]["contract_observations"], 0)
         self.assertEqual(summary["counts"]["particle_contract_links"], 0)
+        self.assertEqual(summary["counts"]["particle_filter_audit"], 0)
+
+    def test_materiality_config_is_part_of_run_identity_and_enforces_cap(self):
+        default_output = self.root / "default_filter.db"
+        custom_output = self.root / "custom_filter.db"
+        _, default_summary = run_replay(self.dataset, default_output)
+        _, custom_summary = run_replay(
+            self.dataset,
+            custom_output,
+            config=ExtractionConfig(
+                max_contract_particles_per_metric_per_snapshot=1
+            ),
+        )
+        self.assertNotEqual(default_summary["run_id"], custom_summary["run_id"])
+        connection = sqlite3.connect(custom_output)
+        try:
+            self.assertLessEqual(
+                connection.execute(
+                    "SELECT MAX(emitted_changes) FROM particle_filter_audit"
+                ).fetchone()[0],
+                1,
+            )
+        finally:
+            connection.close()
 
 
 class HistoryContractSnapshotTest(unittest.TestCase):

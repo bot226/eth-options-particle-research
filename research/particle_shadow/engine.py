@@ -92,7 +92,7 @@ def _score_snapshot(
             else "SUPPORTING",
             "movement_contribution": 0.0,
             "direction_contribution": 0.0,
-            "included_reason": "stored_for_v2_validation_not_used_by_v1_score"
+            "included_reason": "material_v3_observation_not_used_by_scoring"
             if str(particle["particle_type"]).startswith("CONTRACT_")
             else "structural_context",
         }

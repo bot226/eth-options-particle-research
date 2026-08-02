@@ -47,6 +47,17 @@ FROM option_contract_snapshots
 GROUP BY exchange;
 ```
 
+Particle Logic v3 replay must also report filter suppression without changing
+raw contract counts:
+
+```sql
+SELECT metric_name,
+       SUM(observed_changes), SUM(material_changes), SUM(emitted_changes),
+       SUM(suppressed_below_threshold), SUM(suppressed_by_cap)
+FROM particle_filter_audit
+GROUP BY metric_name;
+```
+
 But for Research Layer, main requirement is `mos_research.db + wal + shm`.
 
 ## Required runtime version columns

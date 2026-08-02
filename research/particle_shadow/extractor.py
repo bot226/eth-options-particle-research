@@ -24,6 +24,26 @@ class ExtractionConfig:
     max_research_lag_sec: float = 120.0
     max_history_gap_sec: float = 900.0
     minimum_chain_overlap: float = 0.70
+    max_contract_particles_per_metric_per_snapshot: int = 48
+    contract_iv_absolute_floor: float = 0.001
+    contract_iv_relative_floor: float = 0.0025
+    contract_volume_absolute_floor: float = 0.10
+    contract_delta_absolute_floor: float = 0.001
+    contract_gamma_absolute_floor: float = 0.0000001
+    contract_gamma_relative_floor: float = 0.01
+    contract_vega_absolute_floor: float = 0.10
+    contract_vega_relative_floor: float = 0.005
+    contract_theta_absolute_floor: float = 0.05
+    contract_theta_relative_floor: float = 0.005
+
+    def __post_init__(self) -> None:
+        if self.max_contract_particles_per_metric_per_snapshot < 1:
+            raise ValueError(
+                "max_contract_particles_per_metric_per_snapshot must be positive"
+            )
+        for name, value in self.__dict__.items():
+            if name.endswith(("_floor", "_sec")) and float(value) < 0:
+                raise ValueError(f"{name} must be non-negative")
 
 
 def _readonly_connection(path: Path) -> sqlite3.Connection:
@@ -198,6 +218,8 @@ def extract_particles(
     particle_count = 0
     contract_observation_count = 0
     particle_contract_link_count = 0
+    particle_filter_audit_count = 0
+    particles_suppressed_by_materiality = 0
 
     for row in rows:
         history_id = int(row["id"])
@@ -513,15 +535,36 @@ def extract_particles(
             for item in contract_rows
         }
         contract_metric_specs = (
-            ("mark_iv", "CONTRACT_IV_RISE", "CONTRACT_IV_FALL", "signed"),
-            ("volume_24h", "CONTRACT_VOLUME_RISE", "CONTRACT_VOLUME_FALL", "signed"),
-            ("delta", "CONTRACT_DELTA_UP", "CONTRACT_DELTA_DOWN", "signed"),
-            ("gamma", "CONTRACT_GAMMA_BUILD", "CONTRACT_GAMMA_DECAY", "magnitude"),
-            ("vega", "CONTRACT_VEGA_BUILD", "CONTRACT_VEGA_DECAY", "magnitude"),
-            ("theta", "CONTRACT_THETA_BUILD", "CONTRACT_THETA_DECAY", "magnitude"),
+            (
+                "mark_iv", "CONTRACT_IV_RISE", "CONTRACT_IV_FALL", "signed",
+                config.contract_iv_absolute_floor, config.contract_iv_relative_floor,
+            ),
+            (
+                "volume_24h", "CONTRACT_VOLUME_RISE", "CONTRACT_VOLUME_FALL", "signed",
+                config.contract_volume_absolute_floor, 0.0,
+            ),
+            (
+                "delta", "CONTRACT_DELTA_UP", "CONTRACT_DELTA_DOWN", "signed",
+                config.contract_delta_absolute_floor, 0.0,
+            ),
+            (
+                "gamma", "CONTRACT_GAMMA_BUILD", "CONTRACT_GAMMA_DECAY", "magnitude",
+                config.contract_gamma_absolute_floor, config.contract_gamma_relative_floor,
+            ),
+            (
+                "vega", "CONTRACT_VEGA_BUILD", "CONTRACT_VEGA_DECAY", "magnitude",
+                config.contract_vega_absolute_floor, config.contract_vega_relative_floor,
+            ),
+            (
+                "theta", "CONTRACT_THETA_BUILD", "CONTRACT_THETA_DECAY", "magnitude",
+                config.contract_theta_absolute_floor, config.contract_theta_relative_floor,
+            ),
         )
         common_contracts = sorted(set(previous_contracts) & set(current_contracts))
-        for metric, rise_type, fall_type, comparison_mode in contract_metric_specs:
+        for (
+            metric, rise_type, fall_type, comparison_mode,
+            absolute_floor, relative_floor,
+        ) in contract_metric_specs:
             metric_changes = []
             for contract_key in common_contracts:
                 previous_contract = previous_contracts[contract_key]
@@ -539,11 +582,78 @@ def extract_particles(
                 )
                 if abs(comparison_delta) <= 1e-12:
                     continue
-                metric_changes.append(
-                    (contract_key, previous_value, current_value, comparison_delta)
+                relative_change = (
+                    abs(comparison_delta) / abs(previous_value)
+                    if abs(previous_value) > 1e-12
+                    else None
                 )
-            population = [change[3] for change in metric_changes]
-            for contract_key, previous_value, current_value, delta in metric_changes:
+                metric_changes.append(
+                    (
+                        contract_key, previous_value, current_value,
+                        comparison_delta, relative_change,
+                    )
+                )
+            material_changes = []
+            for change in metric_changes:
+                delta = change[3]
+                relative_change = change[4]
+                absolute_pass = abs(delta) >= absolute_floor
+                relative_pass = (
+                    relative_floor <= 0
+                    or relative_change is None
+                    or relative_change >= relative_floor
+                )
+                if not (absolute_pass and relative_pass):
+                    continue
+                absolute_ratio = abs(delta) / max(absolute_floor, 1e-15)
+                relative_ratio = (
+                    relative_change / relative_floor
+                    if relative_floor > 0 and relative_change is not None
+                    else absolute_ratio
+                )
+                materiality_score = min(absolute_ratio, relative_ratio)
+                material_changes.append((*change, materiality_score))
+            material_changes.sort(
+                key=lambda change: (
+                    -float(change[5]),
+                    -abs(float(change[3])),
+                    change[0][0],
+                    change[0][1],
+                )
+            )
+            emitted_changes = material_changes[
+                :config.max_contract_particles_per_metric_per_snapshot
+            ]
+            if common_contracts:
+                below_threshold = len(metric_changes) - len(material_changes)
+                suppressed_by_cap = len(material_changes) - len(emitted_changes)
+                output.execute(
+                    """
+                    INSERT INTO particle_filter_audit (
+                        run_id, history_snapshot_id, timestamp_utc, metric_name,
+                        observed_changes, material_changes, emitted_changes,
+                        suppressed_below_threshold, suppressed_by_cap,
+                        absolute_floor, relative_floor,
+                        max_particles_per_snapshot
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id, history_id, timestamp, metric,
+                        len(metric_changes), len(material_changes),
+                        len(emitted_changes), below_threshold, suppressed_by_cap,
+                        absolute_floor, relative_floor,
+                        config.max_contract_particles_per_metric_per_snapshot,
+                    ),
+                )
+                particle_filter_audit_count += 1
+                particles_suppressed_by_materiality += (
+                    below_threshold + suppressed_by_cap
+                )
+            population = [change[3] for change in material_changes]
+            for (
+                contract_key, previous_value, current_value, delta,
+                relative_change, materiality_score,
+            ) in emitted_changes:
                 exchange, contract_id = contract_key
                 contract = current_contracts[contract_key]
                 option_type = str(contract.get("option_type") or "")
@@ -565,7 +675,7 @@ def extract_particles(
                         contract.get("expiry"), strike,
                         {"C": "CALL", "P": "PUT"}.get(option_type, "UNKNOWN"),
                         source_key, previous_value, current_value, delta,
-                        delta / abs(previous_value) if abs(previous_value) > 1e-12 else None,
+                        relative_change,
                         percentile_strength(delta, population), distance,
                         _persist(persistence, source_key, particle_type, history_id),
                         source_quality,
@@ -575,7 +685,17 @@ def extract_particles(
                                 "exchange": exchange,
                                 "metric": metric,
                                 "comparison_mode": comparison_mode,
-                                "scoring_role": "observation_only_v2",
+                                "scoring_role": "observation_only_v3",
+                                "materiality_filter": {
+                                    "absolute_floor": absolute_floor,
+                                    "relative_floor": relative_floor,
+                                    "materiality_score": round(materiality_score, 6),
+                                    "eligible_changes": len(material_changes),
+                                    "emitted_changes": len(emitted_changes),
+                                    "max_per_metric_per_snapshot": (
+                                        config.max_contract_particles_per_metric_per_snapshot
+                                    ),
+                                },
                             },
                             sort_keys=True,
                         ),
@@ -628,4 +748,6 @@ def extract_particles(
         "contract_observations": contract_observation_count,
         "particles": particle_count,
         "particle_contract_links": particle_contract_link_count,
+        "particle_filter_audit": particle_filter_audit_count,
+        "particles_suppressed_by_materiality": particles_suppressed_by_materiality,
     }

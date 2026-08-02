@@ -1,11 +1,11 @@
 # MOS_NEXT_TASK.md
 
-## Task: validate v52 Particle Contract Lineage v2 collection
+## Task: validate v53 Particle Materiality Filter v3
 
 ## Goal
 
-Collect and validate source-level option contract metrics while keeping clean
-MOS behavior and all live formulas unchanged.
+Suppress contract-level micro-noise in offline replay while retaining every raw
+contract observation and keeping live MOS unchanged.
 
 ## Inputs
 
@@ -19,7 +19,7 @@ All input databases must be opened read-only.
 
 ## Output
 
-One standalone `particle_shadow_v2.db` containing the v1 tables plus:
+One standalone `particle_shadow_v3.db` containing the v2 tables plus:
 
 ```text
 shadow_runs
@@ -32,6 +32,7 @@ contract_observations
 particle_contract_links
 constellation_particle_links
 candidate_particle_lineage
+particle_filter_audit
 ```
 
 ## New observation-only particle families
@@ -50,6 +51,7 @@ candidate_particle_lineage
 - no look-ahead is allowed when generating a constellation or candidate;
 - future OHLCV is used only by `shadow_outcomes` after the candidate exists.
 - contract-metric particles remain observation-only until validated;
+- materiality floors and the per-metric cap are stored for every snapshot;
 - candidates without option-particle lineage are forbidden.
 
 ## Forbidden
@@ -75,5 +77,8 @@ Do not modify or feed:
 - all shadow candidates have an explainable constellation and blockers;
 - all shadow candidates have at least one `candidate_particle_lineage` row;
 - new collector snapshots contain per-contract IV, volume, and Greeks coverage;
+- v2 and v3 have identical `contract_observations` counts on the same archive;
+- every emitted contract particle passes its recorded materiality gate;
+- emitted contract particles never exceed 48 per metric per snapshot;
 - v1 archives without contract rows still replay successfully;
 - 60/120/240-minute outcomes are stored when OHLCV coverage permits.

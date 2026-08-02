@@ -4,11 +4,11 @@ All engines and loggers MUST import version constants from here.
 Never define CODE_VERSION, RESEARCH_SCHEMA_VERSION, or ENGINE_PATCH_VERSION elsewhere.
 """
 
-CODE_VERSION = "research_fix_2026_08_01_v45"
+CODE_VERSION = "research_fix_2026_08_02_v46"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v52_particle_contract_lineage_v2"
+ENGINE_PATCH_VERSION = "v53_particle_materiality_filter_v3"
 DATASET_EXPORTER_VERSION = "1.1.0"
-PARTICLE_LOGIC_VERSION = "particle_shadow_v2"
+PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 
 # Synthetic Flow Pressure Scale Contract
 # -100 to +100, 0 = neutral

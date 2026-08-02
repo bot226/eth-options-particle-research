@@ -13,7 +13,7 @@ from pathlib import Path
 
 from backend.engine.version import PARTICLE_LOGIC_VERSION
 
-PARTICLE_SHADOW_SCHEMA_VERSION = "particle_shadow_schema_v2"
+PARTICLE_SHADOW_SCHEMA_VERSION = "particle_shadow_schema_v3"
 
 
 SCHEMA_SQL = """
@@ -122,6 +122,24 @@ CREATE TABLE IF NOT EXISTS particle_observations (
     persistence_count INTEGER NOT NULL DEFAULT 1 CHECK (persistence_count >= 1),
     source_quality TEXT NOT NULL,
     features_json TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY (run_id, history_snapshot_id)
+        REFERENCES source_snapshots(run_id, history_snapshot_id)
+);
+
+CREATE TABLE IF NOT EXISTS particle_filter_audit (
+    run_id TEXT NOT NULL,
+    history_snapshot_id INTEGER NOT NULL,
+    timestamp_utc REAL NOT NULL,
+    metric_name TEXT NOT NULL,
+    observed_changes INTEGER NOT NULL,
+    material_changes INTEGER NOT NULL,
+    emitted_changes INTEGER NOT NULL,
+    suppressed_below_threshold INTEGER NOT NULL,
+    suppressed_by_cap INTEGER NOT NULL,
+    absolute_floor REAL NOT NULL,
+    relative_floor REAL NOT NULL,
+    max_particles_per_snapshot INTEGER NOT NULL,
+    PRIMARY KEY (run_id, history_snapshot_id, metric_name),
     FOREIGN KEY (run_id, history_snapshot_id)
         REFERENCES source_snapshots(run_id, history_snapshot_id)
 );
@@ -243,6 +261,8 @@ CREATE INDEX IF NOT EXISTS idx_particle_observations_snapshot
     ON particle_observations(run_id, history_snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_particle_observations_type_timestamp
     ON particle_observations(run_id, particle_type, timestamp_utc);
+CREATE INDEX IF NOT EXISTS idx_particle_filter_audit_metric
+    ON particle_filter_audit(run_id, metric_name, timestamp_utc);
 CREATE INDEX IF NOT EXISTS idx_contract_observations_contract
     ON contract_observations(run_id, exchange, contract_id, timestamp_utc);
 CREATE INDEX IF NOT EXISTS idx_contract_observations_snapshot

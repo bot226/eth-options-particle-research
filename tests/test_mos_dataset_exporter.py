@@ -28,7 +28,7 @@ class MosDatasetExporterTest(unittest.TestCase):
             "RESEARCH_SCHEMA_VERSION = '2.0'\n"
             "ENGINE_PATCH_VERSION = 'test'\n"
             "DATASET_EXPORTER_VERSION = '1.1.0'\n"
-            "PARTICLE_LOGIC_VERSION = 'particle_shadow_v2'\n",
+            "PARTICLE_LOGIC_VERSION = 'particle_shadow_v3'\n",
             encoding="utf-8",
         )
         self.connections = []

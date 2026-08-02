@@ -32,6 +32,9 @@ Per-contract IV, volume, delta, gamma, vega, and theta changes are emitted as
 collected, replayed, and evaluated, but they do not increase candidate scores.
 Promotion into scoring requires walk-forward evidence across multiple regimes.
 
+Particle Logic v3 adds materiality gates and a deterministic per-metric cap to
+these observation-only particles. Raw contract observations remain unchanged.
+
 Candidates with no option particles are not emitted. This is a provenance
 guard, not a threshold change.
 
