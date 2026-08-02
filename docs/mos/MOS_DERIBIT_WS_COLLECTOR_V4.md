@@ -1,4 +1,4 @@
-# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6/v7/v8
+# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6/v7/v8/v9
 
 ## Why it exists
 
@@ -28,11 +28,11 @@ underlying and option prices, plus nested delta, gamma, vega, and theta.
 
 - No private API key is used.
 - The live poll path performs no Deribit bulk REST call.
-- Each contract snapshot older than 120 seconds is excluded.
-- A partially warmed cache is excluded until at least 70% of discovered
-  instruments have delivered ticker snapshots.
+- Each contract snapshot older than five minutes is excluded.
+- A partially warmed cache is excluded until at least 70% of the balanced
+  240-contract research core has delivered ticker snapshots.
 - Instrument discovery retries independently from message handling.
-- Subscription requests are bounded to 500 channels per message; every batch
+- Subscription requests are bounded to 100 core channels per message; every batch
   must be acknowledged before the next one is sent.
 - A channel becomes confirmed only after its JSON-RPC subscription response.
 - Failed or partially acknowledged batches retry only missing channels.
@@ -53,6 +53,8 @@ http://localhost:8005/api/research/deribit-smoke-test
 The response should show `status: ok`, positive WebSocket ticker and Greek
 counts, and
 `deribit_data_transport: websocket_incremental_ticker_cache+rpc_bootstrap`.
+`deribit_ws_cache_coverage_ratio` reports core readiness, while
+`deribit_ws_chain_coverage_ratio` reports full-chain backfill progress.
 
 No database cleanup is required. Existing Bybit-only rows remain valid and the
 first mixed-source row establishes the Deribit activation boundary.
@@ -91,3 +93,17 @@ MOS poll remains cache-only and `incremental_ticker` maintains the result.
 
 The smoke endpoint now reuses the live adapter. It no longer creates a second
 866-contract collector while the first one is warming.
+
+## v58 smoke-test result and v59 adaptive core
+
+v58 confirmed that full `public/ticker` replies contain the required IV and
+Greeks, but only 98 of 220 bootstrap requests succeeded during the measured
+window and 76 timed out. The cache reached 159 complete contracts, while only
+121 remained inside the 120-second freshness window. The bootstrap therefore
+could not reach 70% of all 866 contracts before its earliest results expired.
+
+v59 selects a 240-contract, near-ATM core distributed across every expiry and
+subscribes only that core continuously. It requests two full tickers per second,
+reconnects after three empty batches, and continues the remaining full-chain
+backfill after the core becomes usable. Five-minute freshness matches the slow
+structural snapshot cadence without permitting indefinite stale reuse.

@@ -259,30 +259,65 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(refreshed)
-        self.assertEqual(len(websocket.messages), 2)
+        self.assertEqual(len(websocket.messages), 3)
         subscribed = {
             channel
             for message in websocket.messages
             for channel in message["params"]["channels"]
         }
-        self.assertEqual(len(subscribed), 866)
+        self.assertEqual(len(subscribed), 240)
         self.assertTrue(all(
             channel.startswith("incremental_ticker.BTC-")
             for channel in subscribed
         ))
-        self.assertEqual(len(self.adapter._subscribed_ticker_channels), 866)
+        self.assertEqual(len(self.adapter._subscribed_ticker_channels), 240)
         self.assertEqual(self.adapter._pending_ticker_channels, {})
         self.assertNotIn(
             "BTC-3AUG26-40000-P",
             self.adapter._ticker_cache_by_instrument,
         )
+
+    async def test_subscription_refresh_unsubscribes_contracts_outside_core(self):
+        old_channel = "incremental_ticker.BTC-3AUG26-40000-P"
+        self.adapter._subscribed_ticker_channels.add(old_channel)
+        instruments = [
+            {
+                "instrument_name": "BTC-14AUG26-65000-C",
+                "expiration_timestamp": 1,
+                "strike": 65_000,
+            },
+            {
+                "instrument_name": "BTC-14AUG26-65000-P",
+                "expiration_timestamp": 1,
+                "strike": 65_000,
+            },
+        ]
+        websocket = _FakeWebSocket(self.adapter)
+
+        with patch.object(
+            self.adapter,
+            "fetch_instruments",
+            new=AsyncMock(return_value=instruments),
+        ):
+            refreshed = await self.adapter._refresh_ws_option_subscriptions(
+                websocket
+            )
+
+        self.assertTrue(refreshed)
+        self.assertEqual(
+            [message["method"] for message in websocket.messages],
+            ["public/unsubscribe", "public/subscribe"],
+        )
+        self.assertNotIn(old_channel, self.adapter._subscribed_ticker_channels)
+        self.assertEqual(len(self.adapter._subscribed_ticker_channels), 2)
+
     async def test_stale_ws_cache_is_not_returned_to_live_mos(self):
         name = "BTC-14AUG26-65000-P"
         self.adapter._ticker_cache_by_instrument[name] = {
             "instrument_name": name
         }
-        self.adapter._ticker_received_ts_by_instrument[name] = time.time() - 121
-        self.adapter._tickers_cache_ts = time.time() - 121
+        self.adapter._ticker_received_ts_by_instrument[name] = time.time() - 301
+        self.adapter._tickers_cache_ts = time.time() - 301
 
         self.assertEqual(await self.adapter.fetch_option_tickers(), [])
         self.assertEqual(
@@ -292,6 +327,10 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_partially_warmed_chain_is_not_returned_to_live_mos(self):
         self.adapter._ws_instruments_count = 10
+        self.adapter._ws_core_instrument_names = {
+            f"BTC-14AUG26-{60_000 + index}-C"
+            for index in range(10)
+        }
         for index in range(6):
             name = f"BTC-14AUG26-{60_000 + index}-C"
             self.adapter._ticker_cache_by_instrument[name] = {
@@ -305,6 +344,63 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             self.adapter.disabled_reason,
             "deribit_ws_ticker_cache_warming",
         )
+
+    async def test_core_coverage_can_be_ready_while_full_chain_backfills(self):
+        self.adapter._ws_instruments_count = 866
+        self.adapter._ws_core_instrument_names = {
+            f"BTC-14AUG26-{60_000 + index}-C"
+            for index in range(10)
+        }
+        for index in range(7):
+            name = f"BTC-14AUG26-{60_000 + index}-C"
+            self.adapter._store_ticker_snapshot(
+                {
+                    "instrument_name": name,
+                    "mark_iv": 55.0,
+                    "greeks": {
+                        "delta": 0.4,
+                        "gamma": 0.00003,
+                        "vega": 15.0,
+                        "theta": -6.0,
+                    },
+                },
+                stream_message=False,
+            )
+
+        self.assertEqual(len(await self.adapter.fetch_option_tickers()), 7)
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(diagnostics["deribit_ws_core_fresh_tickers"], 7)
+        self.assertEqual(diagnostics["deribit_ws_cache_coverage_ratio"], 0.7)
+        self.assertLess(diagnostics["deribit_ws_chain_coverage_ratio"], 0.01)
+
+    def test_core_universe_balances_contracts_across_expiries(self):
+        instruments = []
+        for expiry_index in range(4):
+            for strike_index in range(100):
+                instruments.append({
+                    "instrument_name": (
+                        f"BTC-{expiry_index}-{50_000 + strike_index}-C"
+                    ),
+                    "expiration_timestamp": expiry_index + 1,
+                    "strike": 50_000 + strike_index,
+                })
+        self.adapter._spot_price = 50_050.0
+
+        selected = self.adapter._select_core_instrument_names(instruments)
+
+        self.assertEqual(len(selected), 240)
+        self.assertEqual(
+            {int(name.split("-")[1]) for name in selected},
+            {0, 1, 2, 3},
+        )
+        for expiry_index in range(4):
+            self.assertEqual(
+                sum(
+                    name.startswith(f"BTC-{expiry_index}-")
+                    for name in selected
+                ),
+                60,
+            )
 
     async def test_ws_rpc_error_requests_subscription_retry(self):
         self.adapter._subscribed_ticker_channels.add(

@@ -2379,7 +2379,7 @@ async def deribit_smoke_test():
         return {
             "status": "ok" if options and valid_greeks else "degraded",
             "request_attempted": True,
-            "method": "REST discovery + WebSocket incremental cache + RPC bootstrap",
+            "method": "REST discovery + WebSocket core cache + adaptive RPC bootstrap",
             "endpoint_used": "get_instruments & incremental_ticker.<instrument> & public/ticker",
             "collector_reused": not owns_adapter,
             "raw_instruments_count": len(instruments),
@@ -2405,7 +2405,7 @@ async def deribit_smoke_test():
         return {
             "status": "error",
             "request_attempted": True,
-            "method": "REST discovery + WebSocket incremental cache + RPC bootstrap",
+            "method": "REST discovery + WebSocket core cache + adaptive RPC bootstrap",
             "endpoint_used": "get_instruments & incremental_ticker.<instrument> & public/ticker",
             "collector_reused": not owns_adapter,
             "raw_instruments_count": 0,

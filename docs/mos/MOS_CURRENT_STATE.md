@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v51"
+CODE_VERSION = "research_fix_2026_08_03_v52"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v58_deribit_full_ticker_bootstrap"
+ENGINE_PATCH_VERSION = "v59_deribit_adaptive_core_bootstrap"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -136,6 +136,33 @@ v58 therefore:
 - leaves all MOS formulas, databases, manual entries, and particle scoring
   unchanged.
 
+## Deribit adaptive core bootstrap v9
+
+The first v58 collector-host run proved that `public/ticker` works, but the
+host could sustain only about two complete replies per second. Ten concurrent
+requests produced 76 timeouts out of 220 attempts, while the 120-second cache
+window expired early responses before 70% of all 866 instruments could coexist.
+The second 366-channel subscription acknowledgement also timed out behind the
+initial snapshot backlog.
+
+v59 therefore:
+
+- builds a 240-contract research core, selecting near-ATM contracts evenly
+  across every available expiry instead of concentrating on one maturity;
+- requires 70% fresh coverage of that core before Deribit enters aggregation,
+  while continuing to bootstrap the full discovered chain in the background;
+- subscribes only the core in 100-channel batches with a 30-second
+  acknowledgement window, avoiding an 866-channel initial notification burst;
+- sends `public/ticker` in two-request batches at no more than two requests per
+  second and reconnects after three empty batches;
+- delays the independent bootstrap for five seconds so core subscription
+  snapshots can arrive first and duplicate RPC work can be skipped;
+- keeps observations for at most five minutes, matching one slow structural
+  snapshot interval while still rejecting stale data;
+- reports core and full-chain coverage separately;
+- leaves MOS formulas, database schemas, manual entries, and Particle Logic
+  scoring unchanged.
+
 ## Latest validated v20 database
 
 Latest validated database showed approximately:
@@ -210,6 +237,6 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v51 to the collector without clearing databases, run the Deribit smoke
+Deploy v52 to the collector without clearing databases, run the Deribit smoke
 test, and verify that both Bybit and Deribit contract rows reach the next
 five-minute history snapshot. Do not promote contract particles into scoring.

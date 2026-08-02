@@ -58,8 +58,8 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-For v58 Deribit WebSocket collection, the smoke test must report after the
-one-time bootstrap reaches safe coverage:
+For v59 Deribit WebSocket collection, the smoke test must report after the
+adaptive bootstrap reaches safe research-core coverage:
 
 ```text
 status = ok
@@ -74,15 +74,17 @@ deribit_instrument_cache_count > 0
 deribit_ws_subscribed_tickers > 0
 deribit_ws_fresh_tickers > 0
 deribit_ws_cache_coverage_ratio >= 0.7
-deribit_ws_full_tickers / deribit_ws_instruments_count >= 0.7
+deribit_ws_core_instruments_count > 0
+deribit_ws_core_fresh_tickers / deribit_ws_core_instruments_count >= 0.7
+deribit_ws_core_full_tickers / deribit_ws_core_instruments_count >= 0.7
 deribit_ws_bootstrap_state = running or complete
 deribit_ws_bootstrap_success_count > 0
 ```
 
-Incremental subscription requests may still be pending while Deribit drains
-its initial snapshot queue. They must converge to zero in the background, but
-they no longer block a usable chain once the independent full-ticker bootstrap
-has reached 70% coverage.
+`deribit_ws_cache_coverage_ratio` is the readiness ratio for the balanced core.
+`deribit_ws_chain_coverage_ratio` separately reports how much of the full
+discovered chain is fresh. Full-chain bootstrap may continue after the core is
+usable and must not block MOS polling.
 
 After the next five-minute structural snapshot, verify that source-level rows
 exist for both exchanges:
