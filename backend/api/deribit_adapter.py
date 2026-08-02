@@ -26,7 +26,8 @@ from config import (
 log = logging.getLogger(__name__)
 
 _WS_TICKER_INTERVAL = "agg2"
-_WS_SUBSCRIBE_BATCH_SIZE = 100
+_WS_SUBSCRIBE_BATCH_SIZE = 500
+_WS_SUBSCRIBE_BATCH_DELAY_SEC = 0.35
 _WS_INSTRUMENT_REFRESH_SEC = 15 * 60
 _WS_INSTRUMENT_RETRY_SEC = 30
 _WS_TICKER_CACHE_MAX_AGE_SEC = 30
@@ -50,6 +51,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_subscription_retry_event = asyncio.Event()
         self._tickers_cache_ts: float = 0.0
         self._subscribed_ticker_channels: set[str] = set()
+        self._pending_ticker_channels: dict[int, set[str]] = {}
         self._ws_instruments_count: int = 0
         self._ws_ticker_message_count: int = 0
         self._ws_last_ticker_ts: float = 0.0
@@ -242,6 +244,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                     attempt = 0  # reset on successful connect
                     self.health.ws_connected = True
                     self._subscribed_ticker_channels.clear()
+                    self._pending_ticker_channels.clear()
                     self._ws_subscription_retry_event.clear()
                     log.info("Deribit WS connected")
 
@@ -327,6 +330,7 @@ class DeribitAdapter(BaseExchangeAdapter):
             self.last_error_ts = time.time()
             return False
 
+        self._ws_instruments_count = len(instrument_names)
         active_names = set(instrument_names)
         expired_names = set(self._ticker_cache_by_instrument) - active_names
         for instrument_name in expired_names:
@@ -337,48 +341,99 @@ class DeribitAdapter(BaseExchangeAdapter):
             for name in instrument_names
         }
         missing_channels = sorted(
-            desired_channels - self._subscribed_ticker_channels
+            desired_channels
+            - self._subscribed_ticker_channels
+            - {
+                channel
+                for channels in self._pending_ticker_channels.values()
+                for channel in channels
+            }
         )
-        for offset in range(0, len(missing_channels), _WS_SUBSCRIBE_BATCH_SIZE):
-            batch = missing_channels[offset:offset + _WS_SUBSCRIBE_BATCH_SIZE]
-            await self._ws_subscribe(ws, batch)
-            self._subscribed_ticker_channels.update(batch)
+        batches = [
+            missing_channels[offset:offset + _WS_SUBSCRIBE_BATCH_SIZE]
+            for offset in range(0, len(missing_channels), _WS_SUBSCRIBE_BATCH_SIZE)
+        ]
+        for batch_index, batch in enumerate(batches):
+            if batch_index > 0:
+                await asyncio.sleep(_WS_SUBSCRIBE_BATCH_DELAY_SEC)
+            await self._ws_subscribe(
+                ws,
+                batch,
+                track_ticker_channels=True,
+            )
 
-        self._ws_instruments_count = len(instrument_names)
         self._ws_last_subscription_refresh_ts = time.time()
         if missing_channels:
             log.info(
                 "Deribit WS option subscriptions added=%d total=%d",
                 len(missing_channels),
-                len(self._subscribed_ticker_channels),
+                len(desired_channels),
             )
         return True
 
-    async def _ws_subscribe(self, ws, channels: list[str]):
+    async def _ws_subscribe(
+        self,
+        ws,
+        channels: list[str],
+        *,
+        track_ticker_channels: bool = False,
+    ) -> Optional[int]:
         """Send JSON-RPC subscribe request."""
         if not channels:
-            return
+            return None
+        request_id = self._next_id()
         msg = json.dumps({
             "jsonrpc": "2.0",
             "method": "public/subscribe",
-            "id": self._next_id(),
+            "id": request_id,
             "params": {
                 "channels": channels,
             }
         })
-        await ws.send(msg)
+        if track_ticker_channels:
+            self._pending_ticker_channels[request_id] = set(channels)
+        try:
+            await ws.send(msg)
+        except Exception:
+            self._pending_ticker_channels.pop(request_id, None)
+            raise
         log.info("Deribit WS subscription request: %d channels", len(channels))
+        return request_id
 
     async def _handle_ws_message(self, msg: dict):
         """Handle incoming WS message (JSON-RPC notification)."""
+        request_id = msg.get("id")
+        pending_channels = self._pending_ticker_channels.pop(
+            request_id, set()
+        )
+
         if msg.get("error"):
             error = msg.get("error")
             self._ws_subscription_error_count += 1
             self.last_error = f"ws_rpc_error:{error}"
             self.last_error_ts = time.time()
-            self._subscribed_ticker_channels.clear()
             self._ws_subscription_retry_event.set()
             log.warning("Deribit WS RPC error: %s", error)
+            return
+
+        if pending_channels:
+            result = msg.get("result")
+            result_channels = (
+                result
+                if isinstance(result, list)
+                else result.get("channels", [])
+                if isinstance(result, dict)
+                else []
+            )
+            acknowledged = set(result_channels).intersection(pending_channels)
+            self._subscribed_ticker_channels.update(acknowledged)
+            missing_ack = pending_channels - acknowledged
+            if missing_ack:
+                self.last_error = (
+                    f"ws_subscription_partial_ack:{len(missing_ack)}"
+                )
+                self.last_error_ts = time.time()
+                self._ws_subscription_retry_event.set()
             return
 
         # Deribit WS sends notifications with method="subscription"
@@ -452,6 +507,13 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_data_transport": "websocket_ticker_cache",
             "deribit_ws_instruments_count": self._ws_instruments_count,
             "deribit_ws_subscribed_tickers": len(self._subscribed_ticker_channels),
+            "deribit_ws_pending_subscription_requests": len(
+                self._pending_ticker_channels
+            ),
+            "deribit_ws_pending_tickers": sum(
+                len(channels)
+                for channels in self._pending_ticker_channels.values()
+            ),
             "deribit_ws_cached_tickers": len(self._ticker_cache_by_instrument),
             "deribit_ws_cache_coverage_ratio": round(
                 len(self._ticker_cache_by_instrument) / self._ws_instruments_count,

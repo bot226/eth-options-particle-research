@@ -78,9 +78,9 @@ Update only:
 Current development branch:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_02_v47"
+CODE_VERSION = "research_fix_2026_08_02_v48"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v54_deribit_ws_option_tickers"
+ENGINE_PATCH_VERSION = "v55_deribit_ws_subscription_backpressure"
 ```
 
 Do not create duplicate version files.

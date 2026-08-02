@@ -74,7 +74,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def test_subscription_refresh_batches_channels_and_purges_expired_cache(self):
         instruments = [
             {"instrument_name": f"BTC-14AUG26-{50_000 + index}-C"}
-            for index in range(205)
+            for index in range(866)
         ]
         self.adapter._ticker_cache_by_instrument["BTC-3AUG26-40000-P"] = {
             "instrument_name": "BTC-3AUG26-40000-P"
@@ -91,18 +91,35 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(refreshed)
-        self.assertEqual(len(websocket.messages), 3)
+        self.assertEqual(len(websocket.messages), 2)
         subscribed = {
             channel
             for message in websocket.messages
             for channel in message["params"]["channels"]
         }
-        self.assertEqual(len(subscribed), 205)
-        self.assertEqual(len(self.adapter._subscribed_ticker_channels), 205)
+        self.assertEqual(len(subscribed), 866)
+        self.assertEqual(len(self.adapter._subscribed_ticker_channels), 0)
+        self.assertEqual(
+            sum(
+                len(channels)
+                for channels in self.adapter._pending_ticker_channels.values()
+            ),
+            866,
+        )
         self.assertNotIn(
             "BTC-3AUG26-40000-P",
             self.adapter._ticker_cache_by_instrument,
         )
+
+        for message in websocket.messages:
+            await self.adapter._handle_ws_message({
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "result": message["params"]["channels"],
+            })
+
+        self.assertEqual(len(self.adapter._subscribed_ticker_channels), 866)
+        self.assertEqual(self.adapter._pending_ticker_channels, {})
 
     async def test_stale_ws_cache_is_not_returned_to_live_mos(self):
         self.adapter._ticker_cache_by_instrument["BTC-14AUG26-65000-P"] = {
@@ -135,6 +152,8 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.adapter._subscribed_ticker_channels.add(
             "ticker.BTC-14AUG26-65000-C.agg2"
         )
+        failed_channel = "ticker.BTC-14AUG26-66000-C.agg2"
+        self.adapter._pending_ticker_channels[7] = {failed_channel}
 
         await self.adapter._handle_ws_message({
             "jsonrpc": "2.0",
@@ -142,9 +161,42 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             "error": {"code": 10028, "message": "too_many_requests"},
         })
 
-        self.assertEqual(self.adapter._subscribed_ticker_channels, set())
+        self.assertEqual(
+            self.adapter._subscribed_ticker_channels,
+            {"ticker.BTC-14AUG26-65000-C.agg2"},
+        )
+        self.assertNotIn(7, self.adapter._pending_ticker_channels)
         self.assertTrue(self.adapter._ws_subscription_retry_event.is_set())
         self.assertEqual(self.adapter._ws_subscription_error_count, 1)
+
+    async def test_partial_subscription_ack_retries_only_missing_channels(self):
+        websocket = _FakeWebSocket()
+        channels = [
+            "ticker.BTC-14AUG26-65000-C.agg2",
+            "ticker.BTC-14AUG26-66000-C.agg2",
+        ]
+        request_id = await self.adapter._ws_subscribe(
+            websocket,
+            channels,
+            track_ticker_channels=True,
+        )
+
+        await self.adapter._handle_ws_message({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": channels[:1],
+        })
+
+        self.assertEqual(
+            self.adapter._subscribed_ticker_channels,
+            {channels[0]},
+        )
+        self.assertEqual(self.adapter._pending_ticker_channels, {})
+        self.assertTrue(self.adapter._ws_subscription_retry_event.is_set())
+        self.assertEqual(
+            self.adapter.last_error,
+            "ws_subscription_partial_ack:1",
+        )
 
 
 class DeribitTickerNormalizerTest(unittest.TestCase):

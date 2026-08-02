@@ -1,4 +1,4 @@
-# MOS Deribit WebSocket Option Ticker Collector v4
+# MOS Deribit WebSocket Option Ticker Collector v4/v5
 
 ## Why it exists
 
@@ -31,7 +31,10 @@ underlying and option prices, plus nested delta, gamma, vega, and theta.
 - A partially warmed cache is excluded until at least 70% of discovered
   instruments have delivered ticker snapshots.
 - Instrument discovery retries independently from message handling.
-- Subscription requests are bounded to 100 channels per message.
+- Subscription requests are bounded to 500 channels per message and paced.
+- A channel becomes confirmed only after its JSON-RPC subscription response.
+- Failed or partially acknowledged batches retry only missing channels.
+- Diagnostics expose both pending requests and pending ticker counts.
 - The active instrument set is refreshed every 15 minutes.
 - Existing MOS formulas and Particle Logic scoring are unchanged.
 
@@ -48,3 +51,10 @@ counts, and `deribit_data_transport: websocket_ticker_cache`.
 
 No database cleanup is required. Existing Bybit-only rows remain valid and the
 first mixed-source row establishes the Deribit activation boundary.
+
+## v54 collector result
+
+The first approximately 40-minute collector export contained 138 research
+snapshots and nine structural snapshots, but all remained Bybit-only. The
+Deribit cache stayed in `deribit_ws_ticker_cache_warming`; this is the reason
+for the v55 subscription backpressure and acknowledgement patch.

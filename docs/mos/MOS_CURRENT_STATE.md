@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_02_v47"
+CODE_VERSION = "research_fix_2026_08_02_v48"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v54_deribit_ws_option_tickers"
+ENGINE_PATCH_VERSION = "v55_deribit_ws_subscription_backpressure"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -57,6 +57,24 @@ to live MOS decisions.
 - keeps the existing Bybit adapter and all MOS formulas unchanged;
 - keeps `PARTICLE_LOGIC_VERSION = particle_shadow_v3` because candidate scoring
   and offline replay logic are unchanged.
+
+## Deribit subscription backpressure v5
+
+The first collector run on v54 lasted about 40 minutes and proved that the hot
+MOS loop stayed responsive, but every research snapshot remained Bybit-only.
+The Deribit ticker cache never warmed and no Deribit contract row reached
+`history.db`.
+
+v55 therefore:
+
+- sends at most 500 ticker channels per subscription request, reducing an
+  approximately 866-instrument chain from nine immediate requests to two;
+- paces consecutive subscription batches;
+- treats channels as subscribed only after the matching JSON-RPC response;
+- retries only rejected or partially acknowledged channels;
+- exposes pending request and pending ticker counts in diagnostics;
+- leaves cache freshness, 70% coverage, normalization, MOS formulas, and
+  Particle Logic scoring unchanged.
 
 ## Latest validated v20 database
 
@@ -132,6 +150,6 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v47 to the collector without clearing databases, run the Deribit smoke
+Deploy v48 to the collector without clearing databases, run the Deribit smoke
 test, and verify that both Bybit and Deribit contract rows reach the next
 five-minute history snapshot. Do not promote contract particles into scoring.
