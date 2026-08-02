@@ -32,8 +32,12 @@ _WS_SUBSCRIBE_ACK_TIMEOUT_SEC = 10.0
 _WS_INSTRUMENT_REFRESH_SEC = 15 * 60
 _WS_INSTRUMENT_RETRY_SEC = 30
 _INSTRUMENT_CACHE_TTL_SEC = 15 * 60
-_WS_TICKER_CACHE_MAX_AGE_SEC = 90
+_WS_TICKER_CACHE_MAX_AGE_SEC = 120
 _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
+_WS_BOOTSTRAP_BATCH_SIZE = 10
+_WS_BOOTSTRAP_BATCH_INTERVAL_SEC = 1.0
+_WS_BOOTSTRAP_BATCH_TIMEOUT_SEC = 10.0
+_WS_BOOTSTRAP_MAX_PASSES = 3
 
 
 class DeribitAdapter(BaseExchangeAdapter):
@@ -47,6 +51,7 @@ class DeribitAdapter(BaseExchangeAdapter):
             timeout=15,
         )
         self._ws_task: Optional[asyncio.Task] = None
+        self._ticker_bootstrap_task: Optional[asyncio.Task] = None
         self._tickers_cache: list[dict] = []
         self._ticker_cache_by_instrument: dict[str, dict] = {}
         self._ticker_received_ts_by_instrument: dict[str, float] = {}
@@ -64,6 +69,14 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_last_ticker_ts: float = 0.0
         self._ws_last_subscription_refresh_ts: float = 0.0
         self._ws_subscription_error_count: int = 0
+        self._ticker_bootstrap_state: str = "idle"
+        self._ticker_bootstrap_target_count: int = 0
+        self._ticker_bootstrap_request_count: int = 0
+        self._ticker_bootstrap_success_count: int = 0
+        self._ticker_bootstrap_error_count: int = 0
+        self._ticker_bootstrap_last_error: str = ""
+        self._ticker_bootstrap_started_ts: float = 0.0
+        self._ticker_bootstrap_completed_ts: float = 0.0
         self._spot_price: float = 0.0
         self._msg_id: int = 0
         
@@ -90,6 +103,12 @@ class DeribitAdapter(BaseExchangeAdapter):
 
     async def stop(self) -> None:
         self._running = False
+        if self._ticker_bootstrap_task:
+            self._ticker_bootstrap_task.cancel()
+            try:
+                await self._ticker_bootstrap_task
+            except asyncio.CancelledError:
+                pass
         if self._ws_task:
             self._ws_task.cancel()
             try:
@@ -379,6 +398,7 @@ class DeribitAdapter(BaseExchangeAdapter):
             return False
 
         self._ws_instruments_count = len(instrument_names)
+        self._ensure_ticker_bootstrap(instrument_names)
         active_names = set(instrument_names)
         expired_names = set(self._ticker_cache_by_instrument) - active_names
         for instrument_name in expired_names:
@@ -424,6 +444,165 @@ class DeribitAdapter(BaseExchangeAdapter):
                 len(desired_channels),
             )
         return True
+
+    def _ticker_has_full_option_data(self, instrument_name: str) -> bool:
+        """Return whether the cache has the fields required by Particle Logic."""
+        ticker = self._ticker_cache_by_instrument.get(instrument_name)
+        if not isinstance(ticker, dict):
+            return False
+        greeks = ticker.get("greeks")
+        if not isinstance(greeks, dict):
+            return False
+        return (
+            ticker.get("mark_iv") is not None
+            and all(
+                greeks.get(key) is not None
+                for key in ("delta", "gamma", "vega", "theta")
+            )
+        )
+
+    def _ensure_ticker_bootstrap(self, instrument_names: list[str]) -> None:
+        """Start one independent, rate-limited full-ticker bootstrap task."""
+        missing = [
+            name
+            for name in instrument_names
+            if not self._ticker_has_full_option_data(name)
+        ]
+        if not missing:
+            if self._ticker_bootstrap_state != "running":
+                self._ticker_bootstrap_state = "complete"
+            return
+        if (
+            self._ticker_bootstrap_task is not None
+            and not self._ticker_bootstrap_task.done()
+        ):
+            return
+        self._ticker_bootstrap_task = asyncio.create_task(
+            self._bootstrap_full_tickers(list(instrument_names))
+        )
+
+    async def _bootstrap_full_tickers(
+        self,
+        instrument_names: list[str],
+    ) -> None:
+        """Seed full IV/volume/Greeks snapshots without blocking MOS polling."""
+        self._ticker_bootstrap_state = "running"
+        self._ticker_bootstrap_target_count = len(instrument_names)
+        self._ticker_bootstrap_started_ts = time.time()
+        self._ticker_bootstrap_completed_ts = 0.0
+        self._ticker_bootstrap_last_error = ""
+
+        try:
+            for pass_index in range(_WS_BOOTSTRAP_MAX_PASSES):
+                missing = [
+                    name
+                    for name in instrument_names
+                    if not self._ticker_has_full_option_data(name)
+                ]
+                if not missing or not self._running:
+                    break
+
+                try:
+                    async with websockets.connect(
+                        DERIBIT_WS_URL,
+                        ping_interval=None,
+                        ping_timeout=None,
+                        close_timeout=5,
+                        open_timeout=10,
+                    ) as ws:
+                        for offset in range(
+                            0, len(missing), _WS_BOOTSTRAP_BATCH_SIZE
+                        ):
+                            if not self._running:
+                                break
+                            batch = missing[
+                                offset:offset + _WS_BOOTSTRAP_BATCH_SIZE
+                            ]
+                            await self._bootstrap_ticker_batch(ws, batch)
+                            if offset + _WS_BOOTSTRAP_BATCH_SIZE < len(missing):
+                                await asyncio.sleep(
+                                    _WS_BOOTSTRAP_BATCH_INTERVAL_SEC
+                                )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._ticker_bootstrap_error_count += 1
+                    self._ticker_bootstrap_last_error = str(exc)
+                    log.warning(
+                        "Deribit ticker bootstrap pass %d failed: %s",
+                        pass_index + 1,
+                        exc,
+                    )
+                    if pass_index + 1 < _WS_BOOTSTRAP_MAX_PASSES:
+                        await asyncio.sleep(5.0)
+
+            missing_count = sum(
+                not self._ticker_has_full_option_data(name)
+                for name in instrument_names
+            )
+            self._ticker_bootstrap_state = (
+                "complete" if missing_count == 0 else "degraded"
+            )
+        except asyncio.CancelledError:
+            self._ticker_bootstrap_state = "cancelled"
+            raise
+        finally:
+            self._ticker_bootstrap_completed_ts = time.time()
+
+    async def _bootstrap_ticker_batch(
+        self,
+        ws,
+        instrument_names: list[str],
+    ) -> int:
+        """Request a small batch of full public/ticker snapshots over WS."""
+        pending: dict[int, str] = {}
+        for instrument_name in instrument_names:
+            request_id = self._next_id()
+            pending[request_id] = instrument_name
+            await ws.send(json.dumps({
+                "jsonrpc": "2.0",
+                "method": "public/ticker",
+                "id": request_id,
+                "params": {"instrument_name": instrument_name},
+            }))
+            self._ticker_bootstrap_request_count += 1
+
+        successes = 0
+        deadline = time.monotonic() + _WS_BOOTSTRAP_BATCH_TIMEOUT_SEC
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                raw_message = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            except asyncio.TimeoutError:
+                break
+            message = json.loads(raw_message)
+            request_id = message.get("id")
+            instrument_name = pending.pop(request_id, None)
+            if instrument_name is None:
+                continue
+            result = message.get("result")
+            if message.get("error") or not isinstance(result, dict):
+                self._ticker_bootstrap_error_count += 1
+                self._ticker_bootstrap_last_error = (
+                    f"ticker_rpc_error:{message.get('error', 'missing_result')}"
+                )
+                continue
+            self._store_ticker_snapshot(
+                result,
+                instrument_name=instrument_name,
+                stream_message=False,
+            )
+            self._ticker_bootstrap_success_count += 1
+            successes += 1
+
+        if pending:
+            self._ticker_bootstrap_error_count += len(pending)
+            self._ticker_bootstrap_last_error = (
+                f"ticker_rpc_timeout:{len(pending)}"
+            )
+        return successes
 
     async def _ws_subscribe(
         self,
@@ -481,6 +660,64 @@ class DeribitAdapter(BaseExchangeAdapter):
             return False
         finally:
             self._subscription_ack_waiters.pop(request_id, None)
+
+    def _store_ticker_snapshot(
+        self,
+        data: dict,
+        *,
+        instrument_name: str = "",
+        stream_message: bool,
+    ) -> bool:
+        """Merge one full or incremental ticker into the shared cache."""
+        if not isinstance(data, dict):
+            return False
+        instrument_name = str(
+            data.get("instrument_name") or instrument_name
+        )
+        if not instrument_name.startswith("BTC-"):
+            return False
+
+        previous_ticker = self._ticker_cache_by_instrument.get(
+            instrument_name, {}
+        )
+        ticker = dict(previous_ticker)
+        ticker.update(data)
+        for nested_key in ("stats", "greeks"):
+            previous_nested = previous_ticker.get(nested_key)
+            current_nested = data.get(nested_key)
+            if isinstance(previous_nested, dict) and isinstance(
+                current_nested, dict
+            ):
+                ticker[nested_key] = {
+                    **previous_nested,
+                    **current_nested,
+                }
+
+        ticker["instrument_name"] = instrument_name
+        now = time.time()
+        self._ticker_cache_by_instrument[instrument_name] = ticker
+        self._ticker_received_ts_by_instrument[instrument_name] = now
+        self._tickers_cache_ts = now
+        self._ws_last_ticker_ts = now
+        if stream_message:
+            self._ws_ticker_message_count += 1
+        self._ticker_cache_ready.set()
+        self.last_success_ts = now
+        self.last_error = ""
+        self.disabled_reason = ""
+
+        exchange_timestamp = ticker.get("timestamp")
+        latency_ms = self.health.latency_ms
+        try:
+            if exchange_timestamp:
+                latency_ms = max(
+                    0.0,
+                    (now - float(exchange_timestamp) / 1000.0) * 1000.0,
+                )
+        except (TypeError, ValueError):
+            pass
+        self.health.update(latency_ms=latency_ms, ws_connected=True)
+        return True
 
     async def _handle_ws_message(self, msg: dict):
         """Handle incoming WS message (JSON-RPC notification)."""
@@ -548,50 +785,18 @@ class DeribitAdapter(BaseExchangeAdapter):
             instrument_name = str(data.get("instrument_name", ""))
             if not instrument_name:
                 instrument_name = channel[len(_WS_TICKER_CHANNEL_PREFIX):]
-            if not instrument_name.startswith("BTC-"):
-                return
-
-            previous_ticker = self._ticker_cache_by_instrument.get(
-                instrument_name, {}
+            self._store_ticker_snapshot(
+                data,
+                instrument_name=instrument_name,
+                stream_message=True,
             )
-            ticker = dict(previous_ticker)
-            ticker.update(data)
-            for nested_key in ("stats", "greeks"):
-                previous_nested = previous_ticker.get(nested_key)
-                current_nested = data.get(nested_key)
-                if isinstance(previous_nested, dict) and isinstance(
-                    current_nested, dict
-                ):
-                    ticker[nested_key] = {
-                        **previous_nested,
-                        **current_nested,
-                    }
-            ticker["instrument_name"] = instrument_name
-            now = time.time()
-            self._ticker_cache_by_instrument[instrument_name] = ticker
-            self._ticker_received_ts_by_instrument[instrument_name] = now
-            self._tickers_cache_ts = now
-            self._ws_last_ticker_ts = now
-            self._ws_ticker_message_count += 1
-            self._ticker_cache_ready.set()
-            self.last_success_ts = now
-            self.last_error = ""
-            self.disabled_reason = ""
-
-            exchange_timestamp = ticker.get("timestamp")
-            latency_ms = self.health.latency_ms
-            try:
-                if exchange_timestamp:
-                    latency_ms = max(
-                        0.0,
-                        (now - float(exchange_timestamp) / 1000.0) * 1000.0,
-                    )
-            except (TypeError, ValueError):
-                pass
-            self.health.update(latency_ms=latency_ms, ws_connected=True)
 
     def get_diagnostics(self) -> dict:
         """Return explicit diagnostics for Deribit status."""
+        full_ticker_count = sum(
+            self._ticker_has_full_option_data(name)
+            for name in self._ticker_cache_by_instrument
+        )
         return {
             "deribit_enabled_config": self.enabled_config,
             "deribit_adapter_initialized": self.initialized,
@@ -604,7 +809,9 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_last_error_ts": self.last_error_ts,
             "deribit_last_error": self.last_error,
             "deribit_disabled_reason": self.disabled_reason,
-            "deribit_data_transport": "websocket_incremental_ticker_cache",
+            "deribit_data_transport": (
+                "websocket_incremental_ticker_cache+rpc_bootstrap"
+            ),
             "deribit_ws_instruments_count": self._ws_instruments_count,
             "deribit_instrument_cache_count": len(self._instruments_cache),
             "deribit_instrument_cache_age_sec": (
@@ -629,6 +836,27 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_ws_min_cache_coverage_ratio": _WS_MIN_CACHE_COVERAGE_RATIO,
             "deribit_ws_ticker_message_count": self._ws_ticker_message_count,
             "deribit_ws_subscription_error_count": self._ws_subscription_error_count,
+            "deribit_ws_full_tickers": full_ticker_count,
+            "deribit_ws_bootstrap_state": self._ticker_bootstrap_state,
+            "deribit_ws_bootstrap_target_count": self._ticker_bootstrap_target_count,
+            "deribit_ws_bootstrap_request_count": self._ticker_bootstrap_request_count,
+            "deribit_ws_bootstrap_success_count": self._ticker_bootstrap_success_count,
+            "deribit_ws_bootstrap_error_count": self._ticker_bootstrap_error_count,
+            "deribit_ws_bootstrap_pending_tickers": max(
+                0,
+                self._ticker_bootstrap_target_count - full_ticker_count,
+            ),
+            "deribit_ws_bootstrap_last_error": self._ticker_bootstrap_last_error,
+            "deribit_ws_bootstrap_elapsed_sec": (
+                round(
+                    (
+                        self._ticker_bootstrap_completed_ts or time.time()
+                    ) - self._ticker_bootstrap_started_ts,
+                    3,
+                )
+                if self._ticker_bootstrap_started_ts > 0
+                else None
+            ),
             "deribit_ws_last_ticker_ts": self._ws_last_ticker_ts,
             "deribit_ws_last_subscription_refresh_ts": self._ws_last_subscription_refresh_ts,
             "deribit_ws_cache_age_sec": (

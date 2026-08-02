@@ -99,6 +99,10 @@ async def lifespan(app: FastAPI):
     market.set_data_manager(dm)
     market.set_ohlcv_collector(ohlcv_collector)  # v52: share collector for OHLCV sync check
     ws_route.set_data_manager(dm)
+    try:
+        research.set_data_manager(dm)
+    except NameError:
+        pass
     await dm.start()
     await ohlcv_collector.start()
     await event_outcome_worker.start()

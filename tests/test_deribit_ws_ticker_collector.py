@@ -32,6 +32,37 @@ class _FakeWebSocket:
             })
 
 
+class _FakeTickerRpcWebSocket:
+    def __init__(self):
+        self.messages = []
+        self.responses = asyncio.Queue()
+
+    async def send(self, message):
+        parsed = json.loads(message)
+        self.messages.append(parsed)
+        instrument_name = parsed["params"]["instrument_name"]
+        await self.responses.put(json.dumps({
+            "jsonrpc": "2.0",
+            "id": parsed["id"],
+            "result": {
+                "instrument_name": instrument_name,
+                "timestamp": int(time.time() * 1000),
+                "open_interest": 12.5,
+                "mark_iv": 55.0,
+                "stats": {"volume": 3.25},
+                "greeks": {
+                    "delta": 0.4,
+                    "gamma": 0.00003,
+                    "vega": 15.0,
+                    "theta": -6.0,
+                },
+            },
+        }))
+
+    async def recv(self):
+        return await self.responses.get()
+
+
 class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.adapter = DeribitAdapter()
@@ -79,7 +110,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         diagnostics = self.adapter.get_diagnostics()
         self.assertEqual(
             diagnostics["deribit_data_transport"],
-            "websocket_incremental_ticker_cache",
+            "websocket_incremental_ticker_cache+rpc_bootstrap",
         )
         self.assertEqual(diagnostics["deribit_ws_cached_tickers"], 1)
         self.assertEqual(diagnostics["deribit_ws_fresh_tickers"], 1)
@@ -116,6 +147,58 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ticker["stats"]["volume"], 17.25)
         self.assertEqual(ticker["greeks"]["delta"], 0.45)
         self.assertEqual(ticker["greeks"]["gamma"], 0.000031)
+
+    async def test_full_ticker_rpc_batch_seeds_greeks_for_every_contract(self):
+        websocket = _FakeTickerRpcWebSocket()
+        instrument_names = [
+            "BTC-14AUG26-65000-C",
+            "BTC-14AUG26-65000-P",
+        ]
+
+        successes = await self.adapter._bootstrap_ticker_batch(
+            websocket,
+            instrument_names,
+        )
+
+        self.assertEqual(successes, 2)
+        self.assertEqual(len(websocket.messages), 2)
+        self.assertTrue(all(
+            message["method"] == "public/ticker"
+            for message in websocket.messages
+        ))
+        self.assertEqual(len(self.adapter.get_cached_tickers()), 2)
+        self.assertTrue(all(
+            self.adapter._ticker_has_full_option_data(name)
+            for name in instrument_names
+        ))
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(diagnostics["deribit_ws_full_tickers"], 2)
+        self.assertEqual(diagnostics["deribit_ws_bootstrap_request_count"], 2)
+        self.assertEqual(diagnostics["deribit_ws_bootstrap_success_count"], 2)
+        self.assertEqual(diagnostics["deribit_ws_bootstrap_error_count"], 0)
+
+    async def test_bootstrap_singleflight_does_not_duplicate_connections(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def delayed_bootstrap(instrument_names):
+            started.set()
+            await release.wait()
+
+        instrument_names = ["BTC-14AUG26-65000-C"]
+        with patch.object(
+            self.adapter,
+            "_bootstrap_full_tickers",
+            side_effect=delayed_bootstrap,
+        ) as bootstrap:
+            self.adapter._ensure_ticker_bootstrap(instrument_names)
+            first_task = self.adapter._ticker_bootstrap_task
+            await started.wait()
+            self.adapter._ensure_ticker_bootstrap(instrument_names)
+            self.assertIs(self.adapter._ticker_bootstrap_task, first_task)
+            self.assertEqual(bootstrap.call_count, 1)
+            release.set()
+            await first_task
 
     async def test_concurrent_instrument_discovery_uses_one_rest_request(self):
         instruments = [
@@ -198,8 +281,8 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.adapter._ticker_cache_by_instrument[name] = {
             "instrument_name": name
         }
-        self.adapter._ticker_received_ts_by_instrument[name] = time.time() - 91
-        self.adapter._tickers_cache_ts = time.time() - 91
+        self.adapter._ticker_received_ts_by_instrument[name] = time.time() - 121
+        self.adapter._tickers_cache_ts = time.time() - 121
 
         self.assertEqual(await self.adapter.fetch_option_tickers(), [])
         self.assertEqual(

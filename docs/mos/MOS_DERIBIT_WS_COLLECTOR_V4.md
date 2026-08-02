@@ -1,4 +1,4 @@
-# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6/v7
+# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6/v7/v8
 
 ## Why it exists
 
@@ -13,6 +13,7 @@ request could finish.
 ```text
 REST get_instruments
     -> active BTC option names
+    -> rate-limited WebSocket public/ticker bootstrap
     -> WebSocket incremental_ticker.<instrument>
     -> per-instrument raw ticker cache
     -> existing InstrumentNormalizer
@@ -27,7 +28,7 @@ underlying and option prices, plus nested delta, gamma, vega, and theta.
 
 - No private API key is used.
 - The live poll path performs no Deribit bulk REST call.
-- Each contract snapshot older than 90 seconds is excluded.
+- Each contract snapshot older than 120 seconds is excluded.
 - A partially warmed cache is excluded until at least 70% of discovered
   instruments have delivered ticker snapshots.
 - Instrument discovery retries independently from message handling.
@@ -50,7 +51,8 @@ http://localhost:8005/api/research/deribit-smoke-test
 ```
 
 The response should show `status: ok`, positive WebSocket ticker and Greek
-counts, and `deribit_data_transport: websocket_incremental_ticker_cache`.
+counts, and
+`deribit_data_transport: websocket_incremental_ticker_cache+rpc_bootstrap`.
 
 No database cleanup is required. Existing Bybit-only rows remain valid and the
 first mixed-source row establishes the Deribit activation boundary.
@@ -76,3 +78,16 @@ confirmed, but only 26 ordinary ticker updates arrived. Coverage therefore
 remained about 3%, while the second 366-channel batch was still pending. v57
 uses the incremental ticker stream because its first notification supplies the
 full current ticker for every subscribed contract, then merges later changes.
+
+## v57 smoke-test result and v58 bootstrap
+
+On the collector host, v57 received 113 messages but only 57 unique contracts
+in 30 seconds. This showed that Deribit was serializing or throttling the large
+initial snapshot stream despite accepting the first 500 subscriptions. v58
+therefore seeds missing complete tickers on a separate public WebSocket using
+`public/ticker` in ten-request batches at no more than ten requests per second.
+This one-time path supplies IV, volume, prices, and complete Greeks; the normal
+MOS poll remains cache-only and `incremental_ticker` maintains the result.
+
+The smoke endpoint now reuses the live adapter. It no longer creates a second
+866-contract collector while the first one is warming.

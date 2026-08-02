@@ -10,6 +10,13 @@ from typing import Optional, List, Dict
 
 router = APIRouter(prefix="/api/research")
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'mos_research.db'))
+_dm = None
+
+
+def set_data_manager(dm):
+    """Share the running manager so diagnostics do not duplicate collectors."""
+    global _dm
+    _dm = dm
 
 def get_db():
     if not os.path.exists(DB_PATH):
@@ -2332,13 +2339,20 @@ async def deribit_smoke_test():
     import asyncio
     import time
     
-    adapter = DeribitAdapter()
+    adapter = None
+    owns_adapter = False
+    if _dm is not None and hasattr(_dm, "adapters"):
+        adapter = _dm.adapters.get("deribit")
+    if adapter is None:
+        adapter = DeribitAdapter()
+        owns_adapter = True
     
     try:
         t0 = time.time()
         instruments = await adapter.fetch_instruments()
-        await adapter.start()
-        cache_ready = await adapter.wait_for_option_tickers(timeout=30.0)
+        if owns_adapter:
+            await adapter.start()
+        cache_ready = await adapter.wait_for_option_tickers(timeout=120.0)
         if cache_ready:
             await asyncio.sleep(3.0)
         options = await adapter.fetch_option_tickers()
@@ -2365,8 +2379,9 @@ async def deribit_smoke_test():
         return {
             "status": "ok" if options and valid_greeks else "degraded",
             "request_attempted": True,
-            "method": "REST discovery + WebSocket ticker cache",
-            "endpoint_used": "get_instruments & incremental_ticker.<instrument>",
+            "method": "REST discovery + WebSocket incremental cache + RPC bootstrap",
+            "endpoint_used": "get_instruments & incremental_ticker.<instrument> & public/ticker",
+            "collector_reused": not owns_adapter,
             "raw_instruments_count": len(instruments),
             "raw_book_summary_count": 0,
             "raw_ws_ticker_count": len(options),
@@ -2390,8 +2405,9 @@ async def deribit_smoke_test():
         return {
             "status": "error",
             "request_attempted": True,
-            "method": "REST discovery + WebSocket ticker cache",
-            "endpoint_used": "get_instruments & incremental_ticker.<instrument>",
+            "method": "REST discovery + WebSocket incremental cache + RPC bootstrap",
+            "endpoint_used": "get_instruments & incremental_ticker.<instrument> & public/ticker",
+            "collector_reused": not owns_adapter,
             "raw_instruments_count": 0,
             "raw_book_summary_count": 0,
             "raw_ws_ticker_count": 0,
@@ -2412,5 +2428,6 @@ async def deribit_smoke_test():
             "diagnostics": adapter.get_diagnostics()
         }
     finally:
-        await adapter.stop()
+        if owns_adapter:
+            await adapter.stop()
 

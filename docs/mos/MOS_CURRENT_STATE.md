@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v50"
+CODE_VERSION = "research_fix_2026_08_03_v51"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v57_deribit_incremental_ticker_snapshots"
+ENGINE_PATCH_VERSION = "v58_deribit_full_ticker_bootstrap"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -52,7 +52,7 @@ to live MOS decisions.
 - subscribes to `incremental_ticker.<instrument>` in bounded batches;
 - reads per-contract OI, volume, IV, prices, and nested Greeks from WebSocket;
 - exposes a fresh cache to the existing three-second MOS aggregation loop;
-- refuses per-contract cache data older than 90 seconds;
+- refuses per-contract cache data older than 120 seconds;
 - refreshes active instrument subscriptions every 15 minutes;
 - keeps the existing Bybit adapter and all MOS formulas unchanged;
 - keeps `PARTICLE_LOGIC_VERSION = particle_shadow_v3` because candidate scoring
@@ -112,6 +112,29 @@ v57 therefore:
 - exposes fresh-ticker count separately from total cached ticker count;
 - leaves normalization, MOS formulas, databases, candidate scoring, and
   Particle Logic unchanged.
+
+## Deribit full-ticker bootstrap v8
+
+The v57 collector-host smoke test received 113 incremental messages but only
+57 unique contract snapshots in 30 seconds. The first 500 subscriptions were
+confirmed while the next 366-channel request remained queued. The documented
+initial snapshots were therefore correct but too slow to warm a complete
+866-contract chain inside the validation window.
+
+v58 therefore:
+
+- keeps `incremental_ticker` as the continuous low-volume update stream;
+- opens a separate temporary public WebSocket for one-time `public/ticker`
+  snapshots containing per-contract IV, volume, prices, and complete Greeks;
+- sends at most ten ticker requests per second, below Deribit's documented
+  default non-matching request rate;
+- retries only contracts that still lack a complete ticker;
+- increases per-contract freshness to 120 seconds for the bounded bootstrap;
+- makes the smoke endpoint reuse the already-running MOS adapter instead of
+  creating a second competing collector;
+- reports bootstrap target, success, error, pending, and full-ticker counts;
+- leaves all MOS formulas, databases, manual entries, and particle scoring
+  unchanged.
 
 ## Latest validated v20 database
 
@@ -187,6 +210,6 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v50 to the collector without clearing databases, run the Deribit smoke
+Deploy v51 to the collector without clearing databases, run the Deribit smoke
 test, and verify that both Bybit and Deribit contract rows reach the next
 five-minute history snapshot. Do not promote contract particles into scoring.
