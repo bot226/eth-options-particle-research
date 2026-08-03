@@ -2378,7 +2378,7 @@ async def deribit_smoke_test():
             "status": "ok" if options and valid_greeks else "degraded",
             "request_attempted": True,
             "method": (
-                "Compressed REST discovery + supervised WebSocket core cache "
+                "Compressed REST discovery + heartbeat-qualified WebSocket core cache "
                 "+ circuit-broken adaptive REST recovery"
             ),
             "endpoint_used": "get_instruments & incremental_ticker.<instrument> & public/ticker",
@@ -2407,7 +2407,7 @@ async def deribit_smoke_test():
             "status": "error",
             "request_attempted": True,
             "method": (
-                "Compressed REST discovery + supervised WebSocket core cache "
+                "Compressed REST discovery + heartbeat-qualified WebSocket core cache "
                 "+ circuit-broken adaptive REST recovery"
             ),
             "endpoint_used": "get_instruments & incremental_ticker.<instrument> & public/ticker",

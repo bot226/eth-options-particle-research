@@ -1,50 +1,42 @@
 # MOS_NEXT_TASK.md
 
-## Task: validate v65 Deribit REST circuit breaker
+## Task: validate v66 Deribit heartbeat-qualified liveness
 
 ## Goal
 
-Prove that a long Deribit outage produces bounded network probes and fast
-cache-only diagnostics, then that the collector recovers automatically when
-Deribit becomes reachable. Preserve at least 70% fresh complete core coverage
-during healthy collection. Do not change any MOS or candidate formula.
+Prove that a quiet incremental ticker stream no longer causes repeated full
+WebSocket reconnects while a truly dead socket still recovers automatically.
+Preserve at least 70% fresh complete core coverage and all v65 REST circuit
+breaker behavior. Do not change any MOS or candidate formula.
 
 ## Runtime design
 
-- Compressed REST `get_instruments` discovers the complete BTC option chain
-  once per 15 minutes.
-- The last valid chain is stored atomically in
-  `backend/data/deribit_instruments_cache.json`; it is not a database and does
-  not enter Dataset Exporter output.
-- If REST fails and no cached chain exists, one compressed WebSocket
-  `public/get_instruments` RPC is allowed as discovery fallback.
-- WebSocket `incremental_ticker.<instrument>` remains the primary 240-contract
-  core transport and the v63 60-second liveness watchdog remains active.
-- While coverage is below 80% or WebSocket is unhealthy, REST recovery uses
-  two concurrent `public/ticker` requests per one-second batch.
-- Once WebSocket is healthy and core coverage reaches 80%, REST changes to one
-  request every four seconds and refreshes only missing or aging observations.
-- Coverage below 80% automatically restores the faster recovery mode; live MOS
-  polling and the smoke endpoint remain cache-only.
-- A fresh WebSocket BTC index price is reused for 60 seconds instead of issuing
-  the normal repeated REST spot request.
-- Three consecutive transport/HTTP failures across discovery, ticker, or index
-  REST calls open one shared circuit for 30 seconds.
-- Failed half-open probes extend the pause to 60, 120, 240, and at most 300
-  seconds; only one concurrent probe is admitted.
-- While open, cached instrument discovery is immediate and the ticker scheduler
-  issues no REST requests. A successful probe closes the circuit and resumes
-  adaptive recovery.
+- WebSocket `incremental_ticker.<instrument>` remains the primary transport for
+  the balanced 240-contract research core.
+- Sixty seconds without a ticker notification starts liveness qualification;
+  it does not immediately declare the connection dead.
+- A protocol-level WebSocket ping is allowed at most once per 30 seconds while
+  the ticker stream is quiet. It does not consume REST or JSON-RPC capacity.
+- A successful ping requests an in-place unsubscribe/subscribe rebuild of the
+  complete core, with a five-minute cooldown between soft recoveries.
+- A real ticker snapshot must arrive within 90 seconds after the soft recovery.
+  If it does not, or if the protocol heartbeat fails, the existing supervised
+  connection loop performs a full reconnect and resubscription.
+- A recent heartbeat qualifies transport health, but it never makes stale
+  option rows fresh. The five-minute ticker TTL remains unchanged.
+- Core coverage below 80% still switches the REST scheduler to two-request-per-
+  second recovery. At 80% or above it remains at one request every four seconds.
+- The v65 shared REST circuit breaker remains unchanged.
 
 ## Protected behavior
 
 Do not modify State Machine, execution/manual entry logic, analytical formulas,
-events, future labels, OHLCV, database schemas, cache freshness, the 70%
-aggregation threshold, or Particle Logic scoring.
+events, future labels, OHLCV, database schemas, ticker freshness, the 70%
+aggregation threshold, the 80% adaptive-REST switch, or Particle Logic scoring.
 
 ## Collector validation
 
-Start v58/v65 without clearing databases. Wait three to five minutes, then call:
+Start v58/v66 without clearing databases. Wait three to five minutes, then call:
 
 ```text
 GET /api/research/deribit-smoke-test
@@ -58,18 +50,9 @@ elapsed_ms < 5000 on a reused collector
 collector_reused = true
 raw_instruments_count > 0
 raw_ws_ticker_count > 0
-valid_iv_count > 0
-valid_greeks_count > 0
-valid_gamma_count > 0
-deribit_instrument_cache_source = rest_compressed, websocket_rpc, disk, or stale_cache
-deribit_instrument_http_accept_encoding contains gzip
-deribit_instrument_disk_cache_error_count = 0
-deribit_rest_circuit_state = closed
-deribit_rest_circuit_failure_threshold = 3
-deribit_rest_circuit_consecutive_failures = 0
-deribit_rest_circuit_retry_after_sec = 0
-deribit_rest_fast_request_timeout_sec = 5
-deribit_rest_discovery_timeout_sec = 15
+valid_iv_count = raw_ws_ticker_count
+valid_greeks_count = raw_ws_ticker_count
+valid_gamma_count = raw_ws_ticker_count
 deribit_ws_core_instruments_count = 240
 deribit_ws_subscribed_tickers = 240
 deribit_ws_pending_tickers = 0
@@ -77,35 +60,44 @@ deribit_ws_cache_coverage_ratio >= 0.7
 deribit_ws_core_full_tickers >= 168
 deribit_ws_receiver_state = receiving
 deribit_ws_refresh_task_running = true
-deribit_ws_ticker_idle_age_sec < 60
-deribit_ws_bootstrap_policy = circuit_breaker_30_to_300s+adaptive_recovery_2rps_healthy_0.25rps
-deribit_ws_bootstrap_mode = healthy_low_rate
-deribit_ws_bootstrap_current_batch_size = 1
-deribit_ws_bootstrap_current_interval_sec = 4
-deribit_ws_bootstrap_healthy_core_refresh_age_sec = 240
-deribit_ws_bootstrap_healthy_interval_sec = 4
+deribit_ws_liveness_state = ticker_active, stream_quiet_heartbeat_alive,
+    or soft_resubscribe_waiting
+deribit_ws_heartbeat_timeout_sec = 10
+deribit_ws_heartbeat_recheck_sec = 30
+deribit_ws_soft_resubscribe_cooldown_sec = 300
+deribit_ws_soft_resubscribe_grace_sec = 90
+deribit_rest_circuit_state = closed during healthy access
+deribit_ws_bootstrap_mode = healthy_low_rate when coverage >= 0.8
 ```
 
-Record `deribit_fetch_attempt_count`,
-`deribit_ws_bootstrap_recovery_request_count`, and
-`deribit_ws_bootstrap_low_rate_request_count`. Repeat the request after 15 and
-30 minutes without restarting MOS. In uninterrupted healthy mode the low-rate
-counter should grow by no more than about 15 requests per minute. A temporary
-faster increase is valid only while `deribit_ws_bootstrap_mode` reports
+Record these counters immediately after warmup and again after 15 and 30
+minutes without restarting MOS:
+
+```text
+deribit_ws_connection_count
+deribit_ws_reconnect_count
+deribit_ws_idle_reconnect_count
+deribit_ws_heartbeat_attempt_count
+deribit_ws_heartbeat_success_count
+deribit_ws_heartbeat_error_count
+deribit_ws_soft_resubscribe_attempt_count
+deribit_ws_soft_resubscribe_success_count
+deribit_ws_soft_resubscribe_error_count
+deribit_fetch_attempt_count
+deribit_ws_bootstrap_recovery_request_count
+deribit_ws_bootstrap_low_rate_request_count
+```
+
+A quiet but live stream should increase heartbeat and soft-resubscription
+counters without increasing idle reconnects. A soft recovery is successful only
+after a real ticker notification. One attempt per five minutes is the maximum
+normal soft-resubscription rate. If heartbeat fails or the 90-second ticker
+grace expires, `deribit_ws_idle_reconnect_count` must increase and a new
+connection must rebuild the 240-channel core.
+
+The low-rate REST counter should grow by no more than about 15 requests per
+minute while coverage stays at or above 80%. Faster growth is valid only in
 `warmup_recovery` and must stop after coverage returns to at least 80%.
-
-If Deribit becomes unavailable, repeat the smoke request only after the circuit
-reports `open`. It must return in under one second from `stale_cache` when a
-cached chain exists. `deribit_fetch_attempt_count` must remain unchanged before
-`deribit_rest_circuit_next_probe_ts`; the scheduler must report
-`network_backoff/rest_circuit_open` and batch size zero. Observe at least one
-half-open probe. A failed probe must increase the backoff level; a successful
-probe must close the circuit and increment the recovery count.
-
-Restart MOS once after a successful discovery. The first smoke response may
-report `deribit_instrument_cache_source = disk`, and
-`deribit_instrument_disk_cache_load_count` must be positive. Do not delete the
-runtime cache for ordinary validation.
 
 After the next five-minute structural snapshot, verify:
 
@@ -122,21 +114,16 @@ Both `bybit` and `deribit` must appear. Do not clear either database.
 
 ## Acceptance
 
-- compressed discovery succeeds or a valid disk/WebSocket fallback supplies
-  the instrument chain;
-- a complete outage opens the REST circuit after three transport failures and stops
-  network requests between scheduled single probes;
-- cached smoke diagnostics remain fast while the circuit is open;
-- failed probes back off to at most five minutes and a valid reply closes the
-  circuit automatically;
-- initial core readiness reaches at least 70%;
-- healthy collection reaches `healthy_low_rate` and no longer sustains two
-  REST ticker requests per second;
+- healthy ticker traffic remains `ticker_active`;
+- quiet live transport produces successful heartbeat and in-place core
+  resubscription instead of repeated full reconnects;
+- a real ticker completes soft recovery within 90 seconds;
+- failed heartbeat or missing post-resubscribe ticker triggers a full reconnect;
+- hard reconnect growth is materially lower than the v65 result of ten idle
+  reconnects in about 30 minutes;
 - core readiness remains at least 70% across 15- and 30-minute checks;
-- degradation restores fast recovery and later returns to low-rate mode;
-- ticker idle age remains below 60 seconds or triggers the v63 reconnect;
-- the smoke endpoint returns current state without a long wait;
 - stale observations remain excluded after five minutes;
-- the three-second MOS poll remains non-blocking;
+- REST circuit breaker and adaptive request-rate behavior remain valid;
+- the smoke endpoint and three-second MOS poll remain non-blocking;
 - existing tests and Particle Logic replay tests pass;
 - no clean database is required.

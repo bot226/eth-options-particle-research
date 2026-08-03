@@ -7,7 +7,7 @@ Current development branch version:
 ```python
 CODE_VERSION = "research_fix_2026_08_03_v58"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v65_deribit_rest_circuit_breaker"
+ENGINE_PATCH_VERSION = "v66_deribit_ws_qualified_liveness"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -317,6 +317,28 @@ v65 therefore:
   leaves formulas, database schemas, manual entries, and particle scoring
   unchanged.
 
+## Deribit heartbeat-qualified WebSocket liveness v16
+
+The 30-minute v65 validation window kept 80.8% of the research core fresh, but
+the 60-second ticker-silence watchdog caused ten idle reconnects. Intermittent
+incremental updates were quiet even while the socket transport remained alive,
+so full reconnects created unnecessary subscription churn.
+
+v66 therefore:
+
+- qualifies ticker silence with a protocol-level WebSocket ping that does not
+  consume a Deribit JSON-RPC or REST request;
+- rebuilds the complete core subscription in-place after a successful ping,
+  with a five-minute cooldown between soft recoveries;
+- requires a real ticker snapshot within 90 seconds after resubscription and
+  reconnects only when the heartbeat fails or that snapshot grace expires;
+- treats a recent successful heartbeat as healthy transport while preserving
+  the existing 80% adaptive-REST switch and 70% aggregation threshold;
+- exposes heartbeat, soft-resubscription, recovery, and liveness-state counters
+  for 15/30-minute validation;
+- leaves ticker freshness, core selection, REST circuit breaker, MOS formulas,
+  databases, manual entries, and Particle Logic scoring unchanged.
+
 ## Latest validated v20 database
 
 Latest validated database showed approximately:
@@ -391,11 +413,11 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v58/v65 to the collector without clearing databases. During the current
-Deribit outage, verify that the REST circuit advances to `open`, smoke requests
-return quickly from `stale_cache`, and actual REST request count grows only on
-the scheduled single probes. When Deribit returns, verify one successful probe
-closes the circuit, the core warms above 70%, and the scheduler returns to
-`healthy_low_rate`. Then verify that both Bybit and Deribit contract rows reach
-the next five-minute history snapshot. Do not promote contract particles into
-scoring.
+Deploy v58/v66 to the collector without clearing databases. Verify that a
+60-second quiet ticker interval produces a successful protocol heartbeat and
+an in-place core resubscription instead of repeated full reconnects. Across the
+next 15- and 30-minute checks, core coverage must remain above 70%, heartbeat
+or fresh ticker activity must qualify liveness, and hard reconnect growth must
+be materially lower than the v65 window. Then verify that both Bybit and
+Deribit contract rows reach the next five-minute history snapshot. Do not
+promote contract particles into scoring.

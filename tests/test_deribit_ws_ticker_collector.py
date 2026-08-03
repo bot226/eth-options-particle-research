@@ -38,6 +38,13 @@ class _SilentWebSocket:
         await asyncio.sleep(1.0)
 
 
+class _HeartbeatSilentWebSocket(_SilentWebSocket):
+    async def ping(self):
+        pong = asyncio.get_running_loop().create_future()
+        pong.set_result(None)
+        return pong
+
+
 class _InstrumentDiscoveryWebSocket:
     def __init__(self, instruments):
         self.instruments = instruments
@@ -1095,7 +1102,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.adapter._ws_last_ticker_ts = now
         self.assertFalse(self.adapter._is_ws_ticker_stream_idle(now=now))
 
-    async def test_silent_ticker_stream_forces_reconnect(self):
+    async def test_silent_ticker_stream_with_failed_heartbeat_forces_reconnect(self):
         self.adapter._running = True
         self.adapter._subscribed_ticker_channels.add(
             "incremental_ticker.BTC-14AUG26-65000-C"
@@ -1111,12 +1118,126 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaisesRegex(
                 RuntimeError,
-                "deribit_ws_ticker_idle_timeout",
+                "deribit_ws_heartbeat_timeout",
             ):
                 await self.adapter._ws_receive_loop(_SilentWebSocket())
 
         self.assertEqual(self.adapter._ws_idle_reconnect_count, 1)
         self.assertGreater(self.adapter._ws_last_idle_reconnect_ts, 0.0)
+        self.assertEqual(self.adapter._ws_heartbeat_attempt_count, 1)
+        self.assertEqual(self.adapter._ws_heartbeat_error_count, 1)
+
+    async def test_healthy_heartbeat_requests_soft_resubscribe_without_reconnect(self):
+        now = time.time()
+        self.adapter._subscribed_ticker_channels.add(
+            "incremental_ticker.BTC-14AUG26-65000-C"
+        )
+        self.adapter._ws_ticker_watch_started_ts = now - 61.0
+
+        await self.adapter._qualify_ws_ticker_idle(
+            _HeartbeatSilentWebSocket()
+        )
+
+        self.assertEqual(self.adapter._ws_heartbeat_attempt_count, 1)
+        self.assertEqual(self.adapter._ws_heartbeat_success_count, 1)
+        self.assertEqual(self.adapter._ws_idle_reconnect_count, 0)
+        self.assertTrue(self.adapter._ws_soft_resubscribe_requested)
+        self.assertTrue(self.adapter._ws_soft_resubscribe_in_progress)
+        self.assertEqual(self.adapter._ws_soft_resubscribe_attempt_count, 1)
+        self.assertTrue(self.adapter._ws_subscription_retry_event.is_set())
+
+    def test_recent_heartbeat_qualifies_quiet_transport_without_refreshing_data(self):
+        instrument_name = "BTC-14AUG26-65000-C"
+        channel = f"incremental_ticker.{instrument_name}"
+        now = time.time()
+        self.adapter._ws_core_instrument_names = {instrument_name}
+        self.adapter._subscribed_ticker_channels = {channel}
+        self.adapter._ws_receiver_state = "receiving"
+        self.adapter.health.ws_connected = True
+        self.adapter._ws_ticker_watch_started_ts = now - 61.0
+        self.adapter._ws_heartbeat_last_success_ts = now
+
+        self.assertTrue(self.adapter._is_ws_ticker_transport_healthy())
+        self.assertNotIn(
+            instrument_name,
+            self.adapter._fresh_ticker_names(),
+        )
+
+        self.adapter._ws_heartbeat_last_success_ts = now - 31.0
+        self.assertFalse(self.adapter._is_ws_ticker_transport_healthy())
+
+    async def test_soft_resubscribe_rebuilds_core_and_requires_real_ticker(self):
+        instrument_name = "BTC-14AUG26-65000-C"
+        channel = f"incremental_ticker.{instrument_name}"
+        instruments = [{
+            "instrument_name": instrument_name,
+            "expiration_timestamp": 1,
+            "strike": 65_000,
+        }]
+        self.adapter._subscribed_ticker_channels.add(channel)
+        self.adapter._request_ws_soft_resubscribe()
+        websocket = _FakeWebSocket(self.adapter)
+
+        with patch.object(
+            self.adapter,
+            "fetch_instruments",
+            new=AsyncMock(return_value=instruments),
+        ):
+            refreshed = await self.adapter._refresh_ws_option_subscriptions(
+                websocket
+            )
+
+        self.assertTrue(refreshed)
+        self.assertEqual(
+            [message["method"] for message in websocket.messages],
+            ["public/unsubscribe", "public/subscribe"],
+        )
+        self.assertTrue(self.adapter._ws_soft_resubscribe_in_progress)
+        self.assertGreater(self.adapter._ws_soft_resubscribe_last_ack_ts, 0.0)
+
+        await self.adapter._handle_ws_message({
+            "method": "subscription",
+            "params": {
+                "channel": channel,
+                "data": {
+                    "instrument_name": instrument_name,
+                    "mark_iv": 55.2,
+                    "greeks": {
+                        "delta": 0.42,
+                        "gamma": 0.000031,
+                        "vega": 18.5,
+                        "theta": -7.2,
+                    },
+                },
+            },
+        })
+
+        self.assertFalse(self.adapter._ws_soft_resubscribe_in_progress)
+        self.assertEqual(self.adapter._ws_soft_resubscribe_success_count, 1)
+        self.assertGreater(
+            self.adapter._ws_soft_resubscribe_last_success_ts,
+            0.0,
+        )
+
+    async def test_soft_resubscribe_grace_timeout_forces_reconnect(self):
+        now = time.time()
+        self.adapter._subscribed_ticker_channels.add(
+            "incremental_ticker.BTC-14AUG26-65000-C"
+        )
+        self.adapter._ws_ticker_watch_started_ts = now - 200.0
+        self.adapter._ws_soft_resubscribe_in_progress = True
+        self.adapter._ws_soft_resubscribe_requested_ts = now - 91.0
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "deribit_ws_ticker_recovery_timeout",
+        ):
+            await self.adapter._qualify_ws_ticker_idle(
+                _HeartbeatSilentWebSocket()
+            )
+
+        self.assertEqual(self.adapter._ws_idle_reconnect_count, 1)
+        self.assertEqual(self.adapter._ws_soft_resubscribe_error_count, 1)
 
     async def test_subscription_refresh_failure_is_not_silenced(self):
         self.adapter._running = True

@@ -58,7 +58,7 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-For v65 Deribit collection, allow three to five minutes for initial core
+For v66 Deribit collection, allow three to five minutes for initial core
 warmup, then the non-blocking smoke test must report:
 
 ```text
@@ -107,7 +107,12 @@ deribit_ws_bootstrap_cycle_target_count <= deribit_ws_bootstrap_target_count
 deribit_ws_receiver_state = receiving
 deribit_ws_refresh_task_running = true
 deribit_ws_ticker_idle_timeout_sec = 60
-deribit_ws_ticker_idle_age_sec < 60
+deribit_ws_liveness_state = ticker_active, stream_quiet_heartbeat_alive,
+    or soft_resubscribe_waiting
+deribit_ws_heartbeat_timeout_sec = 10
+deribit_ws_heartbeat_recheck_sec = 30
+deribit_ws_soft_resubscribe_cooldown_sec = 300
+deribit_ws_soft_resubscribe_grace_sec = 90
 deribit_ws_connection_count > 0
 deribit_ws_reconnect_count >= 0
 deribit_ws_idle_reconnect_count >= 0
@@ -120,14 +125,16 @@ usable and must not block MOS polling.
 
 Repeat the smoke check after 15 and 30 minutes without restarting MOS. Core
 coverage must remain at or above 70%, the receiver must remain in `receiving`,
-and ticker idle age must stay below 60 seconds. After warmup, low-rate REST
-requests should grow no faster than about 15 per minute, excluding a temporary
-return to `warmup_recovery` when core coverage falls below 80% or WebSocket is
-unhealthy. If the stream stalls, the connection/reconnect counters and
-`deribit_ws_idle_reconnect_count` must increase, followed by fast REST recovery
-and a return to `healthy_low_rate`. A growing total cache with stale core
-coverage and no reconnect is a liveness failure and invalidates that collection
-window.
+and liveness must be qualified by a recent ticker, heartbeat, or an active soft
+resubscription. After warmup, low-rate REST requests should grow no faster than
+about 15 per minute, excluding a temporary return to `warmup_recovery` when
+core coverage falls below 80%. Quiet ticker periods may increase heartbeat and
+soft-resubscription counters without increasing idle reconnects. A failed
+heartbeat or a soft recovery without a real ticker for 90 seconds must increase
+the connection/reconnect and idle-reconnect counters, followed by fast REST
+recovery and a return to `healthy_low_rate`. A growing total cache with stale
+core coverage and neither heartbeat qualification nor reconnect is a liveness
+failure and invalidates that collection window.
 
 During an observed Deribit outage, the valid degraded contract is:
 

@@ -44,6 +44,10 @@ _WS_TICKER_CACHE_MAX_AGE_SEC = 5 * 60
 _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
 _WS_TICKER_IDLE_TIMEOUT_SEC = 60.0
 _WS_RECEIVE_POLL_SEC = 5.0
+_WS_HEARTBEAT_TIMEOUT_SEC = 10.0
+_WS_HEARTBEAT_RECHECK_SEC = 30.0
+_WS_SOFT_RESUBSCRIBE_COOLDOWN_SEC = 5 * 60.0
+_WS_SOFT_RESUBSCRIBE_GRACE_SEC = 90.0
 _WS_SPOT_CACHE_MAX_AGE_SEC = 60.0
 _TICKER_BOOTSTRAP_START_DELAY_SEC = 5.0
 _TICKER_BOOTSTRAP_BATCH_SIZE = 2
@@ -125,6 +129,23 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_connection_count: int = 0
         self._ws_reconnect_count: int = 0
         self._ws_idle_reconnect_count: int = 0
+        self._ws_heartbeat_attempt_count: int = 0
+        self._ws_heartbeat_success_count: int = 0
+        self._ws_heartbeat_error_count: int = 0
+        self._ws_heartbeat_last_attempt_ts: float = 0.0
+        self._ws_heartbeat_last_success_ts: float = 0.0
+        self._ws_heartbeat_last_rtt_ms: float = 0.0
+        self._ws_heartbeat_last_error: str = ""
+        self._ws_soft_resubscribe_requested: bool = False
+        self._ws_soft_resubscribe_in_progress: bool = False
+        self._ws_soft_resubscribe_requested_ts: float = 0.0
+        self._ws_soft_resubscribe_last_ack_ts: float = 0.0
+        self._ws_soft_resubscribe_baseline_ticker_count: int = 0
+        self._ws_soft_resubscribe_attempt_count: int = 0
+        self._ws_soft_resubscribe_success_count: int = 0
+        self._ws_soft_resubscribe_error_count: int = 0
+        self._ws_soft_resubscribe_last_success_ts: float = 0.0
+        self._ws_soft_resubscribe_last_error: str = ""
         self._ws_refresh_loop_error_count: int = 0
         self._ws_refresh_task_running: bool = False
         self._ws_receiver_state: str = "idle"
@@ -599,12 +620,20 @@ class DeribitAdapter(BaseExchangeAdapter):
     def _is_ws_ticker_transport_healthy(self) -> bool:
         """Require a live receiver and the complete core subscription set."""
         core_count = len(self._ws_core_instrument_names)
+        ticker_liveness_qualified = bool(
+            not self._is_ws_ticker_stream_idle()
+            or (
+                self._ws_heartbeat_last_success_ts > 0
+                and time.time() - self._ws_heartbeat_last_success_ts
+                <= _WS_HEARTBEAT_RECHECK_SEC
+            )
+        )
         return bool(
             core_count > 0
             and self.health.ws_connected
             and self._ws_receiver_state == "receiving"
             and len(self._subscribed_ticker_channels) >= core_count
-            and not self._is_ws_ticker_stream_idle()
+            and ticker_liveness_qualified
         )
 
     def _fresh_ticker_names(self) -> set[str]:
@@ -666,6 +695,12 @@ class DeribitAdapter(BaseExchangeAdapter):
                     self._ws_connection_count += 1
                     self._ws_connection_started_ts = time.time()
                     self._ws_ticker_watch_started_ts = 0.0
+                    self._ws_heartbeat_last_attempt_ts = 0.0
+                    self._ws_heartbeat_last_success_ts = 0.0
+                    self._ws_soft_resubscribe_requested = False
+                    self._ws_soft_resubscribe_in_progress = False
+                    self._ws_soft_resubscribe_requested_ts = 0.0
+                    self._ws_soft_resubscribe_last_ack_ts = 0.0
                     self._ws_receiver_state = "receiving"
                     self._subscribed_ticker_channels.clear()
                     self._pending_ticker_channels.clear()
@@ -736,8 +771,88 @@ class DeribitAdapter(BaseExchangeAdapter):
         current_ts = time.time() if now is None else now
         return current_ts - reference_ts >= _WS_TICKER_IDLE_TIMEOUT_SEC
 
+    async def _ws_protocol_heartbeat(self, ws) -> bool:
+        """Qualify socket liveness without adding Deribit API requests."""
+        self._ws_heartbeat_attempt_count += 1
+        self._ws_heartbeat_last_attempt_ts = time.time()
+        started = time.perf_counter()
+        try:
+            pong_waiter = await ws.ping()
+            await asyncio.wait_for(
+                pong_waiter,
+                timeout=_WS_HEARTBEAT_TIMEOUT_SEC,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error_text = str(exc).strip() or type(exc).__name__
+            self._ws_heartbeat_error_count += 1
+            self._ws_heartbeat_last_error = error_text
+            return False
+
+        self._ws_heartbeat_success_count += 1
+        self._ws_heartbeat_last_success_ts = time.time()
+        self._ws_heartbeat_last_rtt_ms = (
+            time.perf_counter() - started
+        ) * 1000.0
+        self._ws_heartbeat_last_error = ""
+        return True
+
+    def _request_ws_soft_resubscribe(self, now: Optional[float] = None) -> None:
+        """Ask the refresh task to rebuild core subscriptions in-place."""
+        current_ts = time.time() if now is None else now
+        self._ws_soft_resubscribe_requested = True
+        self._ws_soft_resubscribe_in_progress = True
+        self._ws_soft_resubscribe_requested_ts = current_ts
+        self._ws_soft_resubscribe_last_ack_ts = 0.0
+        self._ws_soft_resubscribe_baseline_ticker_count = (
+            self._ws_ticker_message_count
+        )
+        self._ws_soft_resubscribe_attempt_count += 1
+        self._ws_subscription_retry_event.set()
+
+    async def _qualify_ws_ticker_idle(self, ws) -> None:
+        """Use heartbeat and in-place resubscription before reconnecting."""
+        now = time.time()
+        if not self._is_ws_ticker_stream_idle(now=now):
+            return
+
+        if self._ws_soft_resubscribe_in_progress:
+            recovery_age = now - self._ws_soft_resubscribe_requested_ts
+            if recovery_age < _WS_SOFT_RESUBSCRIBE_GRACE_SEC:
+                return
+            self._ws_soft_resubscribe_error_count += 1
+            self._ws_soft_resubscribe_last_error = (
+                "ticker_snapshot_grace_timeout"
+            )
+            self._ws_idle_reconnect_count += 1
+            self._ws_last_idle_reconnect_ts = now
+            raise RuntimeError(
+                "deribit_ws_ticker_recovery_timeout:"
+                f">{_WS_SOFT_RESUBSCRIBE_GRACE_SEC:.0f}s"
+            )
+
+        heartbeat_age = now - self._ws_heartbeat_last_attempt_ts
+        if (
+            self._ws_heartbeat_last_attempt_ts > 0
+            and heartbeat_age < _WS_HEARTBEAT_RECHECK_SEC
+        ):
+            return
+
+        if not await self._ws_protocol_heartbeat(ws):
+            self._ws_idle_reconnect_count += 1
+            self._ws_last_idle_reconnect_ts = time.time()
+            raise RuntimeError("deribit_ws_heartbeat_timeout")
+
+        resubscribe_age = now - self._ws_soft_resubscribe_requested_ts
+        if (
+            self._ws_soft_resubscribe_requested_ts <= 0
+            or resubscribe_age >= _WS_SOFT_RESUBSCRIBE_COOLDOWN_SEC
+        ):
+            self._request_ws_soft_resubscribe(now=now)
+
     async def _ws_receive_loop(self, ws) -> None:
-        """Receive messages and fail closed when the ticker stream goes idle."""
+        """Receive messages and qualify ticker silence before reconnecting."""
         while self._running:
             try:
                 message = await asyncio.wait_for(
@@ -746,12 +861,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                 )
             except asyncio.TimeoutError:
                 if self._is_ws_ticker_stream_idle():
-                    self._ws_idle_reconnect_count += 1
-                    self._ws_last_idle_reconnect_ts = time.time()
-                    raise RuntimeError(
-                        "deribit_ws_ticker_idle_timeout:"
-                        f">{_WS_TICKER_IDLE_TIMEOUT_SEC:.0f}s"
-                    )
+                    await self._qualify_ws_ticker_idle(ws)
                 continue
 
             try:
@@ -859,6 +969,9 @@ class DeribitAdapter(BaseExchangeAdapter):
 
     async def _refresh_ws_option_subscriptions(self, ws) -> bool:
         """Subscribe to a balanced core and bootstrap the full chain."""
+        force_core_resubscribe = self._ws_soft_resubscribe_requested
+        if force_core_resubscribe:
+            self._ws_soft_resubscribe_requested = False
         try:
             instruments = await asyncio.wait_for(
                 self.fetch_instruments(), timeout=40.0
@@ -908,6 +1021,23 @@ class DeribitAdapter(BaseExchangeAdapter):
             f"{_WS_TICKER_CHANNEL_PREFIX}{name}"
             for name in core_instrument_names
         }
+        if force_core_resubscribe:
+            active_core_channels = sorted(
+                desired_channels.intersection(
+                    self._subscribed_ticker_channels
+                )
+            )
+            for offset in range(
+                0,
+                len(active_core_channels),
+                _WS_SUBSCRIBE_BATCH_SIZE,
+            ):
+                await self._ws_unsubscribe(
+                    ws,
+                    active_core_channels[
+                        offset:offset + _WS_SUBSCRIBE_BATCH_SIZE
+                    ],
+                )
         obsolete_channels = sorted(
             self._subscribed_ticker_channels - desired_channels
         )
@@ -944,7 +1074,15 @@ class DeribitAdapter(BaseExchangeAdapter):
                 request_id,
                 timeout=_WS_SUBSCRIBE_ACK_TIMEOUT_SEC,
             ):
+                if force_core_resubscribe:
+                    self._ws_soft_resubscribe_error_count += 1
+                    self._ws_soft_resubscribe_last_error = (
+                        self.last_error or "subscription_ack_failed"
+                    )
                 return False
+
+        if force_core_resubscribe:
+            self._ws_soft_resubscribe_last_ack_ts = time.time()
 
         if missing_channels:
             log.info(
@@ -1366,6 +1504,11 @@ class DeribitAdapter(BaseExchangeAdapter):
             self._ws_ticker_received_ts_by_instrument[instrument_name] = now
             self._ws_last_ticker_ts = now
             self._ws_ticker_message_count += 1
+            if self._ws_soft_resubscribe_in_progress:
+                self._ws_soft_resubscribe_in_progress = False
+                self._ws_soft_resubscribe_success_count += 1
+                self._ws_soft_resubscribe_last_success_ts = now
+                self._ws_soft_resubscribe_last_error = ""
         self._ticker_cache_ready.set()
         self.last_success_ts = now
         self.last_error = ""
@@ -1664,6 +1807,74 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_ws_connection_count": self._ws_connection_count,
             "deribit_ws_reconnect_count": self._ws_reconnect_count,
             "deribit_ws_idle_reconnect_count": self._ws_idle_reconnect_count,
+            "deribit_ws_liveness_state": (
+                "ticker_active"
+                if not self._is_ws_ticker_stream_idle(now=now)
+                else "soft_resubscribe_waiting"
+                if self._ws_soft_resubscribe_in_progress
+                else "stream_quiet_heartbeat_alive"
+                if self._ws_heartbeat_last_success_ts > 0
+                and now - self._ws_heartbeat_last_success_ts
+                <= _WS_HEARTBEAT_RECHECK_SEC
+                else "stream_quiet_unqualified"
+            ),
+            "deribit_ws_heartbeat_timeout_sec": _WS_HEARTBEAT_TIMEOUT_SEC,
+            "deribit_ws_heartbeat_recheck_sec": _WS_HEARTBEAT_RECHECK_SEC,
+            "deribit_ws_heartbeat_attempt_count": (
+                self._ws_heartbeat_attempt_count
+            ),
+            "deribit_ws_heartbeat_success_count": (
+                self._ws_heartbeat_success_count
+            ),
+            "deribit_ws_heartbeat_error_count": (
+                self._ws_heartbeat_error_count
+            ),
+            "deribit_ws_heartbeat_last_attempt_ts": (
+                self._ws_heartbeat_last_attempt_ts
+            ),
+            "deribit_ws_heartbeat_last_success_ts": (
+                self._ws_heartbeat_last_success_ts
+            ),
+            "deribit_ws_heartbeat_last_rtt_ms": round(
+                self._ws_heartbeat_last_rtt_ms,
+                3,
+            ),
+            "deribit_ws_heartbeat_last_error": (
+                self._ws_heartbeat_last_error
+            ),
+            "deribit_ws_soft_resubscribe_cooldown_sec": (
+                _WS_SOFT_RESUBSCRIBE_COOLDOWN_SEC
+            ),
+            "deribit_ws_soft_resubscribe_grace_sec": (
+                _WS_SOFT_RESUBSCRIBE_GRACE_SEC
+            ),
+            "deribit_ws_soft_resubscribe_requested": (
+                self._ws_soft_resubscribe_requested
+            ),
+            "deribit_ws_soft_resubscribe_in_progress": (
+                self._ws_soft_resubscribe_in_progress
+            ),
+            "deribit_ws_soft_resubscribe_attempt_count": (
+                self._ws_soft_resubscribe_attempt_count
+            ),
+            "deribit_ws_soft_resubscribe_success_count": (
+                self._ws_soft_resubscribe_success_count
+            ),
+            "deribit_ws_soft_resubscribe_error_count": (
+                self._ws_soft_resubscribe_error_count
+            ),
+            "deribit_ws_soft_resubscribe_requested_ts": (
+                self._ws_soft_resubscribe_requested_ts
+            ),
+            "deribit_ws_soft_resubscribe_last_ack_ts": (
+                self._ws_soft_resubscribe_last_ack_ts
+            ),
+            "deribit_ws_soft_resubscribe_last_success_ts": (
+                self._ws_soft_resubscribe_last_success_ts
+            ),
+            "deribit_ws_soft_resubscribe_last_error": (
+                self._ws_soft_resubscribe_last_error
+            ),
             "deribit_ws_refresh_loop_error_count": (
                 self._ws_refresh_loop_error_count
             ),

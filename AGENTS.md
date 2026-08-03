@@ -34,7 +34,7 @@ Do **not** turn MOS into a buy/sell signal dashboard.
 ```python
 CODE_VERSION = "research_fix_2026_08_03_v58"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v65_deribit_rest_circuit_breaker"
+ENGINE_PATCH_VERSION = "v66_deribit_ws_qualified_liveness"
 ```
 
 ## Known working components
