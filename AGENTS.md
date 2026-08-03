@@ -32,9 +32,9 @@ Do **not** turn MOS into a buy/sell signal dashboard.
 ## Current stable Research Layer version
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v56"
+CODE_VERSION = "research_fix_2026_08_03_v57"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v63_deribit_ws_liveness_watchdog"
+ENGINE_PATCH_VERSION = "v64_deribit_adaptive_rest_guard"
 ```
 
 ## Known working components

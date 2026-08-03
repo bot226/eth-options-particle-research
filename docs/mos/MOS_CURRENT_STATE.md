@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v56"
+CODE_VERSION = "research_fix_2026_08_03_v57"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v63_deribit_ws_liveness_watchdog"
+ENGINE_PATCH_VERSION = "v64_deribit_adaptive_rest_guard"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -258,6 +258,37 @@ v63 therefore:
 - leaves the REST core scheduler, five-minute data TTL, readiness threshold,
   MOS formulas, database schemas, manual entries, and Particle Logic unchanged.
 
+## Deribit adaptive REST guard v14
+
+Collector-host diagnostics proved that Deribit was reachable and returned
+`HTTP 200`, but an uncompressed `get_instruments` response temporarily fell to
+about 850 bytes per second and timed out after 30 seconds. The same request with
+compression completed in about 0.27 seconds. The v63 scheduler also continued
+up to two unauthenticated `public/ticker` requests per second after WebSocket
+recovery, creating avoidable sustained REST traffic.
+
+v64 therefore:
+
+- explicitly advertises gzip/deflate compression for REST discovery and
+  reports response encoding, transferred bytes, decoded bytes, and latency;
+- persists the last successful instrument chain to an atomic JSON disk cache,
+  uses it after transient discovery failure, and keeps databases unchanged;
+- uses one compressed WebSocket `public/get_instruments` RPC only when REST
+  fails and no memory/disk instrument cache exists;
+- keeps the two-request-per-second REST ticker mode only for initial warmup or
+  recovery below 80% core coverage;
+- switches to at most one REST ticker request every four seconds when the full
+  core subscription, WebSocket receiver, and at least 80% core coverage are
+  healthy;
+- revisits core contracts from four minutes in healthy mode, while returning
+  to the faster 60-second recovery schedule if coverage deteriorates;
+- serves the BTC index price from its WebSocket subscription for up to 60
+  seconds, eliminating the normal three-second REST spot poll;
+- exposes adaptive mode, active batch size/interval, recovery versus low-rate
+  request counts, recent WebSocket-served contracts, and disk-cache status;
+- leaves the five-minute ticker TTL, 70% aggregation threshold, MOS formulas,
+  database schemas, manual entries, and Particle Logic scoring unchanged.
+
 ## Latest validated v20 database
 
 Latest validated database showed approximately:
@@ -332,9 +363,10 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v56/v63 to the collector without clearing databases, allow the core to
-warm for three to five minutes, and verify that the WebSocket ticker idle age
-stays below 60 seconds and core coverage stays above 70% across smoke checks at
-15 and 30 minutes. Then verify
+Deploy v57/v64 to the collector without clearing databases, allow the core to
+warm for three to five minutes, and verify that the scheduler changes from
+`warmup_recovery` to `healthy_low_rate`, WebSocket ticker idle age stays below
+60 seconds, and core coverage stays above 70% across smoke checks at 15 and 30
+minutes. Then verify
 that both Bybit and Deribit contract rows reach the next five-minute history
 snapshot. Do not promote contract particles into scoring.

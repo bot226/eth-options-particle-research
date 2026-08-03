@@ -58,7 +58,7 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-For v63 Deribit collection, allow three to five minutes for initial core
+For v64 Deribit collection, allow three to five minutes for initial core
 warmup, then the non-blocking smoke test must report:
 
 ```text
@@ -69,9 +69,12 @@ valid_iv_count > 0
 valid_greeks_count > 0
 valid_gamma_count > 0
 collector_reused = true
-deribit_data_transport = websocket_incremental_ticker_cache+rest_ticker_bootstrap
-deribit_ticker_bootstrap_transport = rest_public_ticker
+deribit_data_transport = compressed_rest_discovery+websocket_incremental_ticker_cache+adaptive_rest_ticker_recovery
+deribit_ticker_bootstrap_transport = adaptive_rest_public_ticker
 deribit_instrument_cache_count > 0
+deribit_instrument_cache_source = rest_compressed, websocket_rpc, disk, or stale_cache
+deribit_instrument_http_accept_encoding contains gzip
+deribit_instrument_disk_cache_error_count = 0
 deribit_ws_subscribed_tickers > 0
 deribit_ws_fresh_tickers > 0
 deribit_ws_cache_coverage_ratio >= 0.7
@@ -79,13 +82,21 @@ deribit_ws_core_instruments_count > 0
 deribit_ws_core_fresh_tickers / deribit_ws_core_instruments_count >= 0.7
 deribit_ws_core_full_tickers / deribit_ws_core_instruments_count >= 0.7
 deribit_ws_bootstrap_state = running or complete
-deribit_ws_bootstrap_phase = maintaining_core or backfilling_chain
-deribit_ws_bootstrap_policy = core_9_to_tail_1_round_robin
+deribit_ws_bootstrap_phase = maintaining_core, backfilling_chain, or recovering_core
+deribit_ws_bootstrap_policy = adaptive_recovery_2rps_healthy_0.25rps
+deribit_ws_bootstrap_mode = healthy_low_rate after warmup
+deribit_ws_bootstrap_current_batch_size = 1 in healthy_low_rate
+deribit_ws_bootstrap_current_interval_sec = 4 in healthy_low_rate
+deribit_ws_bootstrap_low_rate_coverage_ratio = 0.8
 deribit_ws_bootstrap_success_count > 0
 deribit_ws_bootstrap_core_request_count > 0
 deribit_ws_bootstrap_tail_request_count >= 0
+deribit_ws_bootstrap_recovery_request_count > 0
+deribit_ws_bootstrap_low_rate_request_count >= 0
 deribit_ws_bootstrap_core_batches_per_tail_batch = 9
 deribit_ws_bootstrap_core_refresh_age_sec = 60
+deribit_ws_bootstrap_healthy_core_refresh_age_sec = 240
+deribit_ws_bootstrap_healthy_interval_sec = 4
 deribit_ws_bootstrap_cycle_target_count <= deribit_ws_bootstrap_target_count
 deribit_ws_receiver_state = receiving
 deribit_ws_refresh_task_running = true
@@ -103,11 +114,14 @@ usable and must not block MOS polling.
 
 Repeat the smoke check after 15 and 30 minutes without restarting MOS. Core
 coverage must remain at or above 70%, the receiver must remain in `receiving`,
-and ticker idle age must stay below 60 seconds. If the stream stalls, the
-connection/reconnect counters and `deribit_ws_idle_reconnect_count` must
-increase, then idle age and core coverage must recover. A growing total cache
-with stale core coverage and no reconnect is a liveness failure and invalidates
-that collection window.
+and ticker idle age must stay below 60 seconds. After warmup, low-rate REST
+requests should grow no faster than about 15 per minute, excluding a temporary
+return to `warmup_recovery` when core coverage falls below 80% or WebSocket is
+unhealthy. If the stream stalls, the connection/reconnect counters and
+`deribit_ws_idle_reconnect_count` must increase, followed by fast REST recovery
+and a return to `healthy_low_rate`. A growing total cache with stale core
+coverage and no reconnect is a liveness failure and invalidates that collection
+window.
 
 After the next five-minute structural snapshot, verify that source-level rows
 exist for both exchanges:

@@ -1,4 +1,4 @@
-# MOS Deribit WebSocket Option Ticker Collector v4-v13
+# MOS Deribit WebSocket Option Ticker Collector v4-v14
 
 ## Why it exists
 
@@ -11,9 +11,10 @@ request could finish.
 ## Data path
 
 ```text
-REST get_instruments
+compressed REST get_instruments
     -> active BTC option names
-    -> rate-limited REST public/ticker bootstrap
+    -> atomic disk cache / compressed WebSocket discovery fallback
+    -> adaptive REST public/ticker warmup and recovery
     -> WebSocket incremental_ticker.<instrument>
     -> per-instrument raw ticker cache
     -> existing InstrumentNormalizer
@@ -39,6 +40,12 @@ underlying and option prices, plus nested delta, gamma, vega, and theta.
   later partial `stats` and `greeks` changes are deep-merged into it.
 - Diagnostics expose both pending requests and pending ticker counts.
 - The active instrument set is refreshed every 15 minutes.
+- Successful instrument discovery is persisted outside SQLite and reused after
+  a transient REST failure.
+- REST ticker recovery runs at up to two requests per second only during
+  warmup/degradation; healthy WebSocket collection uses at most one request
+  every four seconds.
+- The WebSocket BTC index price replaces normal repeated REST spot polling.
 - Existing MOS formulas and Particle Logic scoring are unchanged.
 - Before 70% core readiness, REST capacity is dedicated to the core. After
   readiness, the scheduler alternates nine core batches with one rotating
@@ -53,8 +60,8 @@ http://localhost:8005/api/research/deribit-smoke-test
 ```
 
 The response should show `status: ok`, positive ticker and Greek counts, and
-`deribit_data_transport: websocket_incremental_ticker_cache+rest_ticker_bootstrap`, with
-`deribit_ticker_bootstrap_transport: rest_public_ticker`.
+`deribit_data_transport: compressed_rest_discovery+websocket_incremental_ticker_cache+adaptive_rest_ticker_recovery`, with
+`deribit_ticker_bootstrap_transport: adaptive_rest_public_ticker`.
 `deribit_ws_cache_coverage_ratio` reports core readiness, while
 `deribit_ws_chain_coverage_ratio` reports full-chain backfill progress.
 The endpoint reports the current cache immediately; it does not wait for a
@@ -161,3 +168,27 @@ and reconnects/resubscribes. Diagnostics expose receiver state, ticker idle
 age, connection and reconnect counters, idle reconnects, refresh-loop errors,
 and whether the refresh task is currently running. REST snapshots do not reset
 the WebSocket liveness clock.
+
+## v63 network result and v64 adaptive REST guard
+
+The collector host resolved Deribit and established TLS normally. A small
+`public/test` call completed in 0.27 seconds, while one uncompressed
+`get_instruments` response returned `HTTP 200` but transferred only 25,498 bytes
+at about 850 bytes per second before a 30-second client timeout. Repeating the
+same request with HTTP compression transferred 12,783 bytes and completed in
+0.27 seconds. This ruled out a hard IP block and showed a transient large-body
+delivery problem.
+
+v64 makes compressed discovery explicit, records its wire/decoded sizes, saves
+the last valid chain atomically to `backend/data/deribit_instruments_cache.json`,
+and uses a compressed WebSocket RPC only when REST and both memory/disk caches
+cannot supply instruments. The runtime file is ignored by Git and does not
+change either MOS database.
+
+The ticker scheduler is now adaptive. During startup, degraded WebSocket state,
+or core coverage below 80%, it retains the proven two-request-per-second
+recovery rate. With a healthy 240-channel subscription and at least 80% fresh
+complete core coverage, it sends at most one REST ticker request every four
+seconds and begins proactive core refresh only at four minutes. If coverage
+falls, it automatically returns to fast recovery. The existing 70% aggregation
+threshold and five-minute stale-data rejection remain unchanged.

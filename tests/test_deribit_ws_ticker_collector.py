@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -37,9 +38,36 @@ class _SilentWebSocket:
         await asyncio.sleep(1.0)
 
 
+class _InstrumentDiscoveryWebSocket:
+    def __init__(self, instruments):
+        self.instruments = instruments
+        self.request = None
+
+    async def send(self, message):
+        self.request = json.loads(message)
+
+    async def recv(self):
+        return json.dumps({
+            "jsonrpc": "2.0",
+            "id": self.request["id"],
+            "result": self.instruments,
+        })
+
+
+class _WebSocketContext:
+    def __init__(self, websocket):
+        self.websocket = websocket
+
+    async def __aenter__(self):
+        return self.websocket
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
 class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.adapter = DeribitAdapter()
+        self.adapter = DeribitAdapter(instrument_cache_path=None)
 
     async def asyncTearDown(self):
         await self.adapter._http.aclose()
@@ -84,7 +112,8 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         diagnostics = self.adapter.get_diagnostics()
         self.assertEqual(
             diagnostics["deribit_data_transport"],
-            "websocket_incremental_ticker_cache+rest_ticker_bootstrap",
+            "compressed_rest_discovery+websocket_incremental_ticker_cache"
+            "+adaptive_rest_ticker_recovery",
         )
         self.assertEqual(diagnostics["deribit_ws_cached_tickers"], 1)
         self.assertEqual(diagnostics["deribit_ws_fresh_tickers"], 1)
@@ -121,6 +150,31 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ticker["stats"]["volume"], 17.25)
         self.assertEqual(ticker["greeks"]["delta"], 0.45)
         self.assertEqual(ticker["greeks"]["gamma"], 0.000031)
+
+    async def test_spot_price_uses_fresh_websocket_cache_without_rest(self):
+        await self.adapter._handle_ws_message({
+            "method": "subscription",
+            "params": {
+                "channel": "deribit_price_index.btc_usd",
+                "data": {"price": 63_500.0},
+            },
+        })
+
+        with patch.object(
+            self.adapter,
+            "_rpc_get",
+            new=AsyncMock(),
+        ) as rpc_get:
+            price = await self.adapter.fetch_spot_price()
+
+        self.assertEqual(price, 63_500.0)
+        self.assertEqual(rpc_get.await_count, 0)
+        self.assertEqual(
+            self.adapter.get_diagnostics()[
+                "deribit_spot_rest_fallback_count"
+            ],
+            0,
+        )
 
     async def test_rest_ticker_batch_seeds_greeks_for_every_contract(self):
         instrument_names = [
@@ -168,7 +222,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics["deribit_ws_bootstrap_error_count"], 0)
         self.assertEqual(
             diagnostics["deribit_ticker_bootstrap_transport"],
-            "rest_public_ticker",
+            "adaptive_rest_public_ticker",
         )
 
     async def test_rest_ticker_batch_counts_missing_results(self):
@@ -310,8 +364,15 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
                 stream_message=False,
             )
             self.adapter._ticker_received_ts_by_instrument[name] = (
-                time.time() - 61
+                time.time() - 241
             )
+        self.adapter.health.ws_connected = True
+        self.adapter._ws_receiver_state = "receiving"
+        self.adapter._ws_ticker_watch_started_ts = time.time()
+        self.adapter._ws_last_ticker_ts = time.time()
+        self.adapter._subscribed_ticker_channels = {
+            f"incremental_ticker.{name}" for name in core_names
+        }
 
         batches = []
 
@@ -328,7 +389,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
                 0.0,
             ),
             patch(
-                "api.deribit_adapter._TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC",
+                "api.deribit_adapter._TICKER_HEALTHY_BATCH_INTERVAL_SEC",
                 0.0,
             ),
             patch.object(
@@ -350,15 +411,31 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         diagnostics = self.adapter.get_diagnostics()
         self.assertEqual(
             diagnostics["deribit_ws_bootstrap_core_request_count"],
-            18,
+            9,
         )
         self.assertEqual(
             diagnostics["deribit_ws_bootstrap_tail_request_count"],
-            2,
+            1,
         )
         self.assertEqual(
             diagnostics["deribit_ws_bootstrap_policy"],
-            "core_9_to_tail_1_round_robin",
+            "adaptive_recovery_2rps_healthy_0.25rps",
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_mode"],
+            "healthy_low_rate",
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_current_batch_size"],
+            1,
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_low_rate_request_count"],
+            10,
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_recovery_request_count"],
+            0,
         )
 
     async def test_refresh_scheduler_does_not_backfill_before_core_ready(self):
@@ -411,6 +488,19 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             ],
             0,
         )
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_mode"],
+            "warmup_recovery",
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_current_batch_size"],
+            2,
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_recovery_request_count"],
+            6,
+        )
 
     async def test_concurrent_instrument_discovery_uses_one_rest_request(self):
         instruments = [
@@ -443,6 +533,10 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             self.adapter,
             "_rpc_get",
             new=AsyncMock(side_effect=[instruments, None]),
+        ), patch.object(
+            self.adapter,
+            "_fetch_instruments_ws_fallback",
+            new=AsyncMock(return_value=[]),
         ):
             first = await self.adapter.fetch_instruments()
             self.adapter._instruments_cache_ts = 0.0
@@ -450,6 +544,150 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first, instruments)
         self.assertEqual(fallback, instruments)
+
+    async def test_instrument_discovery_uses_websocket_rpc_after_rest_failure(self):
+        instruments = [
+            {"instrument_name": "BTC-14AUG26-65000-C"},
+            {"instrument_name": "BTC-14AUG26-65000-P"},
+        ]
+        with patch.object(
+            self.adapter,
+            "_rpc_get",
+            new=AsyncMock(return_value=None),
+        ), patch.object(
+            self.adapter,
+            "_fetch_instruments_ws_fallback",
+            new=AsyncMock(return_value=instruments),
+        ) as ws_fallback:
+            result = await self.adapter.fetch_instruments()
+
+        self.assertEqual(result, instruments)
+        self.assertEqual(ws_fallback.await_count, 1)
+        self.assertEqual(
+            self.adapter.get_diagnostics()["deribit_instrument_cache_source"],
+            "websocket_rpc",
+        )
+
+    async def test_websocket_instrument_fallback_requests_compressed_chain(self):
+        instruments = [
+            {"instrument_name": "BTC-14AUG26-65000-C"},
+        ]
+        websocket = _InstrumentDiscoveryWebSocket(instruments)
+        with patch(
+            "api.deribit_adapter.websockets.connect",
+            return_value=_WebSocketContext(websocket),
+        ) as connect:
+            result = await self.adapter._fetch_instruments_ws_fallback()
+
+        self.assertEqual(result, instruments)
+        self.assertEqual(
+            websocket.request["method"],
+            "public/get_instruments",
+        )
+        self.assertIs(websocket.request["params"]["expired"], False)
+        self.assertEqual(connect.call_args.kwargs["compression"], "deflate")
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(
+            diagnostics["deribit_instrument_ws_fallback_attempt_count"],
+            1,
+        )
+        self.assertEqual(
+            diagnostics["deribit_instrument_ws_fallback_success_count"],
+            1,
+        )
+
+    async def test_instrument_discovery_records_compression_diagnostics(self):
+        instruments = [
+            {"instrument_name": "BTC-14AUG26-65000-C"},
+        ]
+
+        class _CompressedResponse:
+            headers = {"content-encoding": "gzip"}
+            content = json.dumps({
+                "jsonrpc": "2.0",
+                "result": instruments,
+            }).encode("utf-8")
+            num_bytes_downloaded = 42
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"jsonrpc": "2.0", "result": instruments}
+
+        response = _CompressedResponse()
+        with patch.object(
+            self.adapter._http,
+            "get",
+            new=AsyncMock(return_value=response),
+        ):
+            result = await self.adapter.fetch_instruments()
+
+        self.assertEqual(result, instruments)
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertIn(
+            "gzip",
+            diagnostics["deribit_instrument_http_accept_encoding"],
+        )
+        self.assertEqual(
+            diagnostics["deribit_instrument_http_content_encoding"],
+            "gzip",
+        )
+        self.assertGreater(
+            diagnostics["deribit_instrument_http_download_bytes"],
+            0,
+        )
+        self.assertGreater(
+            diagnostics["deribit_instrument_http_decoded_bytes"],
+            0,
+        )
+
+    async def test_instrument_discovery_persists_and_reloads_disk_cache(self):
+        instruments = [
+            {"instrument_name": "BTC-14AUG26-65000-C"},
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "deribit_instruments_cache.json"
+            writer = DeribitAdapter(instrument_cache_path=cache_path)
+            try:
+                with patch.object(
+                    writer,
+                    "_rpc_get",
+                    new=AsyncMock(return_value=instruments),
+                ):
+                    self.assertEqual(
+                        await writer.fetch_instruments(),
+                        instruments,
+                    )
+                self.assertTrue(cache_path.exists())
+            finally:
+                await writer._http.aclose()
+
+            reader = DeribitAdapter(instrument_cache_path=cache_path)
+            try:
+                with patch.object(
+                    reader,
+                    "_rpc_get",
+                    new=AsyncMock(),
+                ) as rpc_get:
+                    self.assertEqual(
+                        await reader.fetch_instruments(),
+                        instruments,
+                    )
+                self.assertEqual(rpc_get.await_count, 0)
+                diagnostics = reader.get_diagnostics()
+                self.assertEqual(
+                    diagnostics["deribit_instrument_cache_source"],
+                    "disk",
+                )
+                self.assertEqual(
+                    diagnostics["deribit_instrument_disk_cache_load_count"],
+                    1,
+                )
+            finally:
+                await reader._http.aclose()
 
     async def test_subscription_refresh_batches_channels_and_purges_expired_cache(self):
         instruments = [
