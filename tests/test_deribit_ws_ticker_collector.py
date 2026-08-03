@@ -113,7 +113,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             diagnostics["deribit_data_transport"],
             "compressed_rest_discovery+websocket_incremental_ticker_cache"
-            "+adaptive_rest_ticker_recovery",
+            "+circuit_broken_adaptive_rest_ticker_recovery",
         )
         self.assertEqual(diagnostics["deribit_ws_cached_tickers"], 1)
         self.assertEqual(diagnostics["deribit_ws_fresh_tickers"], 1)
@@ -222,7 +222,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics["deribit_ws_bootstrap_error_count"], 0)
         self.assertEqual(
             diagnostics["deribit_ticker_bootstrap_transport"],
-            "adaptive_rest_public_ticker",
+            "circuit_broken_adaptive_rest_public_ticker",
         )
 
     async def test_rest_ticker_batch_counts_missing_results(self):
@@ -244,6 +244,234 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             diagnostics["deribit_ws_bootstrap_last_error"],
             "rest_timeout",
+        )
+
+    async def test_rest_circuit_opens_and_skips_network_after_failures(self):
+        with patch.object(
+            self.adapter._http,
+            "get",
+            new=AsyncMock(side_effect=TimeoutError()),
+        ) as http_get:
+            for _ in range(3):
+                result = await self.adapter._rpc_get(
+                    "ticker",
+                    {"instrument_name": "BTC-14AUG26-65000-C"},
+                    max_retries=1,
+                )
+                self.assertIsNone(result)
+            skipped = await self.adapter._rpc_get(
+                "ticker",
+                {"instrument_name": "BTC-14AUG26-65000-P"},
+                max_retries=1,
+            )
+
+        self.assertIsNone(skipped)
+        self.assertEqual(http_get.await_count, 3)
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(diagnostics["deribit_fetch_attempt_count"], 3)
+        self.assertEqual(diagnostics["deribit_rest_circuit_state"], "open")
+        self.assertEqual(
+            diagnostics["deribit_rest_circuit_consecutive_failures"],
+            3,
+        )
+        self.assertEqual(diagnostics["deribit_rest_circuit_open_count"], 1)
+        self.assertEqual(diagnostics["deribit_rest_circuit_skip_count"], 1)
+        self.assertEqual(
+            diagnostics["deribit_rest_circuit_last_error"],
+            "TimeoutError",
+        )
+        self.assertGreater(
+            diagnostics["deribit_rest_circuit_retry_after_sec"],
+            0.0,
+        )
+
+    async def test_json_rpc_errors_do_not_open_network_circuit(self):
+        class _ErrorResponse:
+            headers = {}
+            content = b'{"error":{"message":"instrument not found"}}'
+            num_bytes_downloaded = len(content)
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"error": {"message": "instrument not found"}}
+
+        with patch.object(
+            self.adapter._http,
+            "get",
+            new=AsyncMock(return_value=_ErrorResponse()),
+        ) as http_get:
+            for _ in range(3):
+                self.assertIsNone(await self.adapter._rpc_get(
+                    "ticker",
+                    {"instrument_name": "BTC-EXPIRED-C"},
+                    max_retries=1,
+                ))
+
+        self.assertEqual(http_get.await_count, 3)
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(diagnostics["deribit_rest_circuit_state"], "closed")
+        self.assertEqual(
+            diagnostics["deribit_rest_circuit_consecutive_failures"],
+            0,
+        )
+        self.assertEqual(diagnostics["deribit_rest_circuit_open_count"], 0)
+
+    async def test_rest_circuit_allows_one_probe_and_closes_on_success(self):
+        class _Response:
+            headers = {}
+            content = b'{"result":{"index_price":63500.0}}'
+            num_bytes_downloaded = len(content)
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"result": {"index_price": 63_500.0}}
+
+        self.adapter._rest_circuit_consecutive_failures = 3
+        self.adapter._rest_circuit_backoff_level = 1
+        self.adapter._rest_circuit_open_until_ts = time.time() - 0.01
+        probe_started = asyncio.Event()
+        release_probe = asyncio.Event()
+
+        async def delayed_response(*args, **kwargs):
+            probe_started.set()
+            await release_probe.wait()
+            return _Response()
+
+        with patch.object(
+            self.adapter._http,
+            "get",
+            new=AsyncMock(side_effect=delayed_response),
+        ) as http_get:
+            first_task = asyncio.create_task(self.adapter._rpc_get(
+                "get_index_price",
+                {"index_name": "btc_usd"},
+                max_retries=1,
+            ))
+            await probe_started.wait()
+            second = await self.adapter._rpc_get(
+                "get_index_price",
+                {"index_name": "btc_usd"},
+                max_retries=1,
+            )
+            release_probe.set()
+            first = await first_task
+
+        self.assertEqual(http_get.await_count, 1)
+        self.assertIn({"index_price": 63_500.0}, (first, second))
+        self.assertIn(None, (first, second))
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(diagnostics["deribit_rest_circuit_state"], "closed")
+        self.assertEqual(
+            diagnostics["deribit_rest_circuit_consecutive_failures"],
+            0,
+        )
+        self.assertEqual(diagnostics["deribit_rest_circuit_probe_count"], 1)
+        self.assertEqual(diagnostics["deribit_rest_circuit_recovery_count"], 1)
+        self.assertEqual(diagnostics["deribit_rest_circuit_skip_count"], 1)
+        self.assertEqual(http_get.await_args.kwargs["timeout"], 5.0)
+
+    async def test_open_rest_circuit_returns_stale_instruments_without_io(self):
+        instruments = [
+            {"instrument_name": "BTC-14AUG26-65000-C"},
+        ]
+        self.adapter._instruments_cache = instruments
+        self.adapter._instruments_cache_ts = 0.0
+        self.adapter._rest_circuit_open_until_ts = time.time() + 30.0
+        self.adapter._rest_circuit_backoff_level = 1
+
+        with patch.object(
+            self.adapter._http,
+            "get",
+            new=AsyncMock(),
+        ) as http_get:
+            result = await self.adapter.fetch_instruments()
+
+        self.assertEqual(result, instruments)
+        self.assertEqual(http_get.await_count, 0)
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(
+            diagnostics["deribit_instrument_cache_source"],
+            "stale_cache",
+        )
+        self.assertEqual(diagnostics["deribit_rest_circuit_skip_count"], 1)
+
+    def test_failed_half_open_probe_doubles_rest_backoff(self):
+        for _ in range(3):
+            self.adapter._record_rest_failure("timeout")
+        first_backoff = (
+            self.adapter._rest_circuit_open_until_ts
+            - self.adapter._rest_circuit_last_open_ts
+        )
+
+        self.adapter._rest_circuit_open_until_ts = time.time() - 0.01
+        self.assertTrue(self.adapter._acquire_rest_request_slot())
+        self.adapter._record_rest_failure("timeout-again")
+        second_backoff = (
+            self.adapter._rest_circuit_open_until_ts
+            - self.adapter._rest_circuit_last_open_ts
+        )
+
+        self.assertEqual(first_backoff, 30.0)
+        self.assertEqual(second_backoff, 60.0)
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(diagnostics["deribit_rest_circuit_backoff_level"], 2)
+        self.assertEqual(diagnostics["deribit_rest_circuit_probe_count"], 1)
+        self.assertEqual(diagnostics["deribit_rest_circuit_open_count"], 2)
+
+    async def test_refresh_scheduler_makes_no_requests_while_circuit_open(self):
+        name = "BTC-14AUG26-65000-C"
+        self.adapter._ws_instruments_count = 1
+        self.adapter._ws_core_instrument_names = {name}
+        self.adapter._ticker_bootstrap_instrument_names = [name]
+        self.adapter._rest_circuit_open_until_ts = time.time() + 30.0
+        self.adapter._rest_circuit_backoff_level = 1
+        self.adapter._running = True
+        sleep_count = 0
+
+        async def stop_after_backoff_sleep(_delay):
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 2:
+                self.adapter._running = False
+
+        with (
+            patch(
+                "api.deribit_adapter._TICKER_BOOTSTRAP_START_DELAY_SEC",
+                0.0,
+            ),
+            patch(
+                "api.deribit_adapter.asyncio.sleep",
+                side_effect=stop_after_backoff_sleep,
+            ),
+            patch.object(
+                self.adapter,
+                "_bootstrap_ticker_rest_batch",
+                new=AsyncMock(),
+            ) as rest_batch,
+        ):
+            await self.adapter._bootstrap_full_tickers([name])
+
+        self.assertEqual(rest_batch.await_count, 0)
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_mode"],
+            "network_backoff",
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_phase"],
+            "rest_circuit_open",
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_current_batch_size"],
+            0,
         )
 
     async def test_bootstrap_singleflight_does_not_duplicate_connections(self):
@@ -419,6 +647,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             diagnostics["deribit_ws_bootstrap_policy"],
+            "circuit_breaker_30_to_300s+"
             "adaptive_recovery_2rps_healthy_0.25rps",
         )
         self.assertEqual(

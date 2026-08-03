@@ -58,7 +58,7 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-For v64 Deribit collection, allow three to five minutes for initial core
+For v65 Deribit collection, allow three to five minutes for initial core
 warmup, then the non-blocking smoke test must report:
 
 ```text
@@ -69,8 +69,14 @@ valid_iv_count > 0
 valid_greeks_count > 0
 valid_gamma_count > 0
 collector_reused = true
-deribit_data_transport = compressed_rest_discovery+websocket_incremental_ticker_cache+adaptive_rest_ticker_recovery
-deribit_ticker_bootstrap_transport = adaptive_rest_public_ticker
+deribit_data_transport = compressed_rest_discovery+websocket_incremental_ticker_cache+circuit_broken_adaptive_rest_ticker_recovery
+deribit_ticker_bootstrap_transport = circuit_broken_adaptive_rest_public_ticker
+deribit_rest_circuit_state = closed during healthy collection
+deribit_rest_circuit_failure_threshold = 3
+deribit_rest_circuit_consecutive_failures = 0 during healthy collection
+deribit_rest_circuit_retry_after_sec = 0 during healthy collection
+deribit_rest_fast_request_timeout_sec = 5
+deribit_rest_discovery_timeout_sec = 15
 deribit_instrument_cache_count > 0
 deribit_instrument_cache_source = rest_compressed, websocket_rpc, disk, or stale_cache
 deribit_instrument_http_accept_encoding contains gzip
@@ -83,7 +89,7 @@ deribit_ws_core_fresh_tickers / deribit_ws_core_instruments_count >= 0.7
 deribit_ws_core_full_tickers / deribit_ws_core_instruments_count >= 0.7
 deribit_ws_bootstrap_state = running or complete
 deribit_ws_bootstrap_phase = maintaining_core, backfilling_chain, or recovering_core
-deribit_ws_bootstrap_policy = adaptive_recovery_2rps_healthy_0.25rps
+deribit_ws_bootstrap_policy = circuit_breaker_30_to_300s+adaptive_recovery_2rps_healthy_0.25rps
 deribit_ws_bootstrap_mode = healthy_low_rate after warmup
 deribit_ws_bootstrap_current_batch_size = 1 in healthy_low_rate
 deribit_ws_bootstrap_current_interval_sec = 4 in healthy_low_rate
@@ -122,6 +128,29 @@ unhealthy. If the stream stalls, the connection/reconnect counters and
 and a return to `healthy_low_rate`. A growing total cache with stale core
 coverage and no reconnect is a liveness failure and invalidates that collection
 window.
+
+During an observed Deribit outage, the valid degraded contract is:
+
+```text
+status = degraded
+elapsed_ms < 1000 once the circuit is already open and cache is reused
+raw_instruments_count > 0 when memory/disk cache exists
+raw_ws_ticker_count = 0 after all option observations exceed five minutes
+deribit_instrument_cache_source = stale_cache
+deribit_rest_circuit_state = open
+deribit_rest_circuit_consecutive_failures >= 3
+deribit_rest_circuit_retry_after_sec > 0
+deribit_ws_bootstrap_mode = network_backoff
+deribit_ws_bootstrap_phase = rest_circuit_open
+deribit_ws_bootstrap_current_batch_size = 0
+```
+
+While the circuit remains open, `deribit_fetch_attempt_count` must not increase.
+At expiry exactly one half-open probe may increase it. A failed probe increases
+the backoff through 30, 60, 120, 240, and at most 300 seconds. A successful
+probe must set `deribit_rest_circuit_state = closed`, increment the recovery
+counter, and resume `warmup_recovery` followed by `healthy_low_rate`. Stale
+option rows must never be returned as current observations.
 
 After the next five-minute structural snapshot, verify that source-level rows
 exist for both exchanges:

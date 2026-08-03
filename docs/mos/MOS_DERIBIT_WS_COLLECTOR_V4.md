@@ -60,8 +60,8 @@ http://localhost:8005/api/research/deribit-smoke-test
 ```
 
 The response should show `status: ok`, positive ticker and Greek counts, and
-`deribit_data_transport: compressed_rest_discovery+websocket_incremental_ticker_cache+adaptive_rest_ticker_recovery`, with
-`deribit_ticker_bootstrap_transport: adaptive_rest_public_ticker`.
+`deribit_data_transport: compressed_rest_discovery+websocket_incremental_ticker_cache+circuit_broken_adaptive_rest_ticker_recovery`, with
+`deribit_ticker_bootstrap_transport: circuit_broken_adaptive_rest_public_ticker`.
 `deribit_ws_cache_coverage_ratio` reports core readiness, while
 `deribit_ws_chain_coverage_ratio` reports full-chain backfill progress.
 The endpoint reports the current cache immediately; it does not wait for a
@@ -192,3 +192,26 @@ complete core coverage, it sends at most one REST ticker request every four
 seconds and begins proactive core refresh only at four minutes. If coverage
 falls, it automatically returns to fast recovery. The existing 70% aggregation
 threshold and five-minute stale-data rejection remain unchanged.
+
+## v64 outage result and v65 REST circuit breaker
+
+After a healthy v64 warmup, Deribit became unavailable over both REST and
+WebSocket. MOS preserved the 826-instrument chain from its disk-backed cache
+and correctly stopped emitting stale option rows, but the fast recovery mode
+kept retrying `public/ticker`. The smoke route also waited for a new 15-second
+`get_instruments` timeout although a valid stale chain was already available.
+
+v65 treats the REST endpoints as one failure domain. Three consecutive
+transport/HTTP failures open a shared circuit. Backoff progresses through 30,
+60, 120, and 240 seconds,
+then remains capped at 300 seconds. Only one request is admitted when the timer
+expires; other concurrent calls remain cache-only. A failed probe advances the
+backoff, while any valid REST result closes the circuit and allows normal
+adaptive recovery to resume.
+
+While the circuit is open, the ticker scheduler reports
+`network_backoff/rest_circuit_open`, issues no REST requests, and retains stale
+records only for diagnostics. Stale option observations remain excluded from
+MOS after five minutes. Instrument smoke checks return the existing chain
+immediately. Per-contract ticker and spot requests use a five-second timeout;
+compressed discovery keeps a 15-second timeout.

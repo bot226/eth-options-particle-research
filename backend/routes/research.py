@@ -2377,7 +2377,10 @@ async def deribit_smoke_test():
         return {
             "status": "ok" if options and valid_greeks else "degraded",
             "request_attempted": True,
-            "method": "Compressed REST discovery + supervised WebSocket core cache + adaptive low-rate REST recovery",
+            "method": (
+                "Compressed REST discovery + supervised WebSocket core cache "
+                "+ circuit-broken adaptive REST recovery"
+            ),
             "endpoint_used": "get_instruments & incremental_ticker.<instrument> & public/ticker",
             "collector_reused": not owns_adapter,
             "raw_instruments_count": len(instruments),
@@ -2403,7 +2406,10 @@ async def deribit_smoke_test():
         return {
             "status": "error",
             "request_attempted": True,
-            "method": "Compressed REST discovery + supervised WebSocket core cache + adaptive low-rate REST recovery",
+            "method": (
+                "Compressed REST discovery + supervised WebSocket core cache "
+                "+ circuit-broken adaptive REST recovery"
+            ),
             "endpoint_used": "get_instruments & incremental_ticker.<instrument> & public/ticker",
             "collector_reused": not owns_adapter,
             "raw_instruments_count": 0,

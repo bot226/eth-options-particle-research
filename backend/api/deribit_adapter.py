@@ -56,6 +56,11 @@ _TICKER_HEALTHY_CORE_REFRESH_AGE_SEC = 4 * 60.0
 _TICKER_LOW_RATE_COVERAGE_RATIO = 0.80
 _TICKER_CORE_BATCHES_PER_TAIL_BATCH = 9
 _TICKER_BOOTSTRAP_IDLE_SEC = 1.0
+_REST_FAST_REQUEST_TIMEOUT_SEC = 5.0
+_REST_DISCOVERY_TIMEOUT_SEC = 15.0
+_REST_CIRCUIT_FAILURE_THRESHOLD = 3
+_REST_CIRCUIT_INITIAL_BACKOFF_SEC = 30.0
+_REST_CIRCUIT_MAX_BACKOFF_SEC = 5 * 60.0
 
 
 class DeribitAdapter(BaseExchangeAdapter):
@@ -142,6 +147,17 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ticker_bootstrap_last_request_ts: float = 0.0
         self._ticker_bootstrap_started_ts: float = 0.0
         self._ticker_bootstrap_completed_ts: float = 0.0
+        self._rest_circuit_consecutive_failures: int = 0
+        self._rest_circuit_open_until_ts: float = 0.0
+        self._rest_circuit_backoff_level: int = 0
+        self._rest_circuit_open_count: int = 0
+        self._rest_circuit_skip_count: int = 0
+        self._rest_circuit_probe_count: int = 0
+        self._rest_circuit_recovery_count: int = 0
+        self._rest_circuit_probe_in_flight: bool = False
+        self._rest_circuit_last_open_ts: float = 0.0
+        self._rest_circuit_last_failure_ts: float = 0.0
+        self._rest_circuit_last_error: str = ""
         self._spot_price: float = 0.0
         self._ws_last_spot_ts: float = 0.0
         self._spot_rest_fallback_count: int = 0
@@ -191,6 +207,79 @@ class DeribitAdapter(BaseExchangeAdapter):
     def _next_id(self) -> int:
         self._msg_id += 1
         return self._msg_id
+
+    def _rest_circuit_state(self, now: Optional[float] = None) -> str:
+        """Return closed, open, or half_open without issuing a request."""
+        current_ts = time.time() if now is None else now
+        if self._rest_circuit_open_until_ts <= 0:
+            return "closed"
+        if current_ts < self._rest_circuit_open_until_ts:
+            return "open"
+        return "half_open"
+
+    def _rest_circuit_retry_after_sec(
+        self,
+        now: Optional[float] = None,
+    ) -> float:
+        current_ts = time.time() if now is None else now
+        return max(0.0, self._rest_circuit_open_until_ts - current_ts)
+
+    def _acquire_rest_request_slot(self) -> bool:
+        """Permit normal calls, but allow only one probe after backoff."""
+        state = self._rest_circuit_state()
+        if state == "open":
+            self._rest_circuit_skip_count += 1
+            return False
+        if state == "half_open":
+            if self._rest_circuit_probe_in_flight:
+                self._rest_circuit_skip_count += 1
+                return False
+            self._rest_circuit_probe_in_flight = True
+            self._rest_circuit_probe_count += 1
+        return True
+
+    def _record_rest_success(self) -> None:
+        """Close the circuit after any valid Deribit REST response."""
+        recovering = (
+            self._rest_circuit_open_until_ts > 0
+            or self._rest_circuit_backoff_level > 0
+        )
+        if recovering:
+            self._rest_circuit_recovery_count += 1
+        self._rest_circuit_consecutive_failures = 0
+        self._rest_circuit_open_until_ts = 0.0
+        self._rest_circuit_backoff_level = 0
+        self._rest_circuit_probe_in_flight = False
+        self._rest_circuit_last_error = ""
+
+    def _record_rest_failure(self, error: object) -> None:
+        """Open the shared REST circuit after repeated transport failures."""
+        now = time.time()
+        error_text = str(error).strip() or type(error).__name__
+        self._rest_circuit_consecutive_failures += 1
+        self._rest_circuit_last_failure_ts = now
+        self._rest_circuit_last_error = error_text
+        was_probe = self._rest_circuit_probe_in_flight
+        self._rest_circuit_probe_in_flight = False
+        should_open = bool(
+            self._rest_circuit_consecutive_failures
+            >= _REST_CIRCUIT_FAILURE_THRESHOLD
+            and (
+                was_probe
+                or self._rest_circuit_open_until_ts <= now
+            )
+        )
+        if not should_open:
+            return
+        self._rest_circuit_backoff_level += 1
+        delay = min(
+            _REST_CIRCUIT_MAX_BACKOFF_SEC,
+            _REST_CIRCUIT_INITIAL_BACKOFF_SEC
+            * (2 ** (self._rest_circuit_backoff_level - 1)),
+        )
+        self._rest_circuit_open_until_ts = now + delay
+        self._rest_circuit_last_open_ts = now
+        self._rest_circuit_open_count += 1
 
     @staticmethod
     def _valid_instruments(value: object) -> list[dict]:
@@ -314,10 +403,21 @@ class DeribitAdapter(BaseExchangeAdapter):
         """Deribit REST uses JSON-RPC style but via standard GET with query params."""
         self.fetch_attempted = True
         for attempt in range(max_retries):
+            if not self._acquire_rest_request_slot():
+                return None
             self.request_count += 1
             try:
                 t0 = time.time()
-                resp = await self._http.get(f"/public/{method}", params=params)
+                timeout_sec = (
+                    _REST_DISCOVERY_TIMEOUT_SEC
+                    if method == "get_instruments"
+                    else _REST_FAST_REQUEST_TIMEOUT_SEC
+                )
+                resp = await self._http.get(
+                    f"/public/{method}",
+                    params=params,
+                    timeout=timeout_sec,
+                )
                 latency = (time.time() - t0) * 1000
                 resp.raise_for_status()
                 if method == "get_instruments":
@@ -336,22 +436,33 @@ class DeribitAdapter(BaseExchangeAdapter):
                     self.last_error = f"API Error: {err_msg}"
                     self.last_error_ts = time.time()
                     self.error_count += 1
+                    # A valid JSON-RPC error proves that the REST transport is
+                    # reachable.  It must not trip the network-outage circuit.
+                    self._record_rest_success()
                     log.error("Deribit API error: %s", err_msg)
                     return None
-                
+
                 self.success_count += 1
                 self.last_success_ts = time.time()
+                self._record_rest_success()
                 self.health.update(latency_ms=latency, ws_connected=self.health.ws_connected)
                 return data["result"]
             except Exception as e:
+                error_text = str(e).strip() or type(e).__name__
                 self.error_count += 1
-                self.last_error = str(e)
+                self.last_error = error_text
                 self.last_error_ts = time.time()
-                log.error("Deribit REST error (%s) attempt %d: %s", method, attempt + 1, e)
+                self._record_rest_failure(error_text)
+                log.error(
+                    "Deribit REST error (%s) attempt %d: %s",
+                    method,
+                    attempt + 1,
+                    error_text,
+                )
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1.0 * (2 ** attempt))
                 else:
-                    self.health.mark_error(str(e))
+                    self.health.mark_error(error_text)
                     return None
         return None
 
@@ -528,7 +639,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._spot_rest_fallback_count += 1
         result = await self._rpc_get("get_index_price", {
             "index_name": "btc_usd",
-        })
+        }, max_retries=1)
         if result and "index_price" in result:
             self._spot_price = float(result["index_price"])
             return self._spot_price
@@ -954,6 +1065,18 @@ class DeribitAdapter(BaseExchangeAdapter):
 
             while self._running:
                 active_names = list(self._ticker_bootstrap_instrument_names)
+                rest_circuit_state = self._rest_circuit_state()
+                if rest_circuit_state == "open":
+                    retry_after_sec = self._rest_circuit_retry_after_sec()
+                    self._ticker_bootstrap_mode = "network_backoff"
+                    self._ticker_bootstrap_phase = "rest_circuit_open"
+                    self._ticker_bootstrap_current_batch_size = 0
+                    self._ticker_bootstrap_current_interval_sec = round(
+                        retry_after_sec,
+                        3,
+                    )
+                    await asyncio.sleep(min(max(retry_after_sec, 0.1), 30.0))
+                    continue
                 core_set = self._ws_core_instrument_names
                 core_names = [
                     name for name in active_names if name in core_set
@@ -988,6 +1111,9 @@ class DeribitAdapter(BaseExchangeAdapter):
                     if low_rate_mode
                     else _TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC
                 )
+                if rest_circuit_state == "half_open":
+                    self._ticker_bootstrap_mode = "network_probe"
+                    batch_size = 1
                 core_refresh_age_sec = (
                     _TICKER_HEALTHY_CORE_REFRESH_AGE_SEC
                     if low_rate_mode
@@ -1380,6 +1506,8 @@ class DeribitAdapter(BaseExchangeAdapter):
             and ticker_watch_reference_ts > 0
             else None
         )
+        rest_circuit_state = self._rest_circuit_state(now=now)
+        rest_retry_after_sec = self._rest_circuit_retry_after_sec(now=now)
         return {
             "deribit_enabled_config": self.enabled_config,
             "deribit_adapter_initialized": self.initialized,
@@ -1394,10 +1522,65 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_disabled_reason": self.disabled_reason,
             "deribit_data_transport": (
                 "compressed_rest_discovery+websocket_incremental_ticker_cache"
-                "+adaptive_rest_ticker_recovery"
+                "+circuit_broken_adaptive_rest_ticker_recovery"
             ),
             "deribit_ticker_bootstrap_transport": (
-                "adaptive_rest_public_ticker"
+                "circuit_broken_adaptive_rest_public_ticker"
+            ),
+            "deribit_rest_circuit_state": rest_circuit_state,
+            "deribit_rest_circuit_failure_threshold": (
+                _REST_CIRCUIT_FAILURE_THRESHOLD
+            ),
+            "deribit_rest_circuit_consecutive_failures": (
+                self._rest_circuit_consecutive_failures
+            ),
+            "deribit_rest_circuit_backoff_level": (
+                self._rest_circuit_backoff_level
+            ),
+            "deribit_rest_circuit_current_backoff_sec": round(
+                max(
+                    0.0,
+                    self._rest_circuit_open_until_ts
+                    - self._rest_circuit_last_open_ts,
+                ),
+                3,
+            ),
+            "deribit_rest_circuit_retry_after_sec": round(
+                rest_retry_after_sec,
+                3,
+            ),
+            "deribit_rest_circuit_next_probe_ts": (
+                self._rest_circuit_open_until_ts
+            ),
+            "deribit_rest_circuit_open_count": (
+                self._rest_circuit_open_count
+            ),
+            "deribit_rest_circuit_skip_count": (
+                self._rest_circuit_skip_count
+            ),
+            "deribit_rest_circuit_probe_count": (
+                self._rest_circuit_probe_count
+            ),
+            "deribit_rest_circuit_recovery_count": (
+                self._rest_circuit_recovery_count
+            ),
+            "deribit_rest_circuit_probe_in_flight": (
+                self._rest_circuit_probe_in_flight
+            ),
+            "deribit_rest_circuit_last_open_ts": (
+                self._rest_circuit_last_open_ts
+            ),
+            "deribit_rest_circuit_last_failure_ts": (
+                self._rest_circuit_last_failure_ts
+            ),
+            "deribit_rest_circuit_last_error": (
+                self._rest_circuit_last_error
+            ),
+            "deribit_rest_fast_request_timeout_sec": (
+                _REST_FAST_REQUEST_TIMEOUT_SEC
+            ),
+            "deribit_rest_discovery_timeout_sec": (
+                _REST_DISCOVERY_TIMEOUT_SEC
             ),
             "deribit_ws_instruments_count": self._ws_instruments_count,
             "deribit_ws_core_instruments_count": core_count,
@@ -1514,6 +1697,7 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_ws_bootstrap_state": self._ticker_bootstrap_state,
             "deribit_ws_bootstrap_phase": self._ticker_bootstrap_phase,
             "deribit_ws_bootstrap_policy": (
+                "circuit_breaker_30_to_300s+"
                 "adaptive_recovery_2rps_healthy_0.25rps"
             ),
             "deribit_ws_bootstrap_mode": self._ticker_bootstrap_mode,

@@ -78,9 +78,9 @@ Update only:
 Current development branch:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v57"
+CODE_VERSION = "research_fix_2026_08_03_v58"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v64_deribit_adaptive_rest_guard"
+ENGINE_PATCH_VERSION = "v65_deribit_rest_circuit_breaker"
 ```
 
 Do not create duplicate version files.

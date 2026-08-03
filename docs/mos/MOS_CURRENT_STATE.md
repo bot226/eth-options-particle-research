@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v57"
+CODE_VERSION = "research_fix_2026_08_03_v58"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v64_deribit_adaptive_rest_guard"
+ENGINE_PATCH_VERSION = "v65_deribit_rest_circuit_breaker"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -289,6 +289,34 @@ v64 therefore:
 - leaves the five-minute ticker TTL, 70% aggregation threshold, MOS formulas,
   database schemas, manual entries, and Particle Logic scoring unchanged.
 
+## Deribit REST circuit breaker v15
+
+The long v64 collector test later encountered a complete Deribit outage. The
+instrument disk cache correctly preserved 826 contracts and stale tickers were
+excluded, but all 240 core contracts became stale. REST recovery accumulated
+224 failed ticker calls while the WebSocket reconnected, and a smoke request
+waited about 15 seconds for another discovery timeout.
+
+v65 therefore:
+
+- shares one REST circuit breaker across instrument discovery, per-contract
+  ticker recovery, and the BTC index fallback;
+- opens the circuit after three consecutive transport/HTTP failures and retries with one
+  half-open probe after 30, 60, 120, 240, then at most 300 seconds;
+- prevents concurrent calls during the half-open probe and closes the circuit
+  immediately after any valid REST response;
+- pauses the ticker recovery scheduler without issuing network requests while
+  the circuit is open, then resumes core warmup automatically after recovery;
+- returns the stale instrument set immediately while the circuit is open, so
+  the smoke endpoint remains cache-only instead of waiting for another timeout;
+- limits ticker and spot REST calls to five seconds and disables repeated spot
+  retries; compressed instrument discovery retains its 15-second timeout;
+- exposes circuit state, retry delay, backoff level, failures, skipped calls,
+  probes, recoveries, and the last circuit error in diagnostics;
+- continues to reject option ticker observations older than five minutes and
+  leaves formulas, database schemas, manual entries, and particle scoring
+  unchanged.
+
 ## Latest validated v20 database
 
 Latest validated database showed approximately:
@@ -363,10 +391,11 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v57/v64 to the collector without clearing databases, allow the core to
-warm for three to five minutes, and verify that the scheduler changes from
-`warmup_recovery` to `healthy_low_rate`, WebSocket ticker idle age stays below
-60 seconds, and core coverage stays above 70% across smoke checks at 15 and 30
-minutes. Then verify
-that both Bybit and Deribit contract rows reach the next five-minute history
-snapshot. Do not promote contract particles into scoring.
+Deploy v58/v65 to the collector without clearing databases. During the current
+Deribit outage, verify that the REST circuit advances to `open`, smoke requests
+return quickly from `stale_cache`, and actual REST request count grows only on
+the scheduled single probes. When Deribit returns, verify one successful probe
+closes the circuit, the core warms above 70%, and the scheduler returns to
+`healthy_low_rate`. Then verify that both Bybit and Deribit contract rows reach
+the next five-minute history snapshot. Do not promote contract particles into
+scoring.
