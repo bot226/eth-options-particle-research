@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v54"
+CODE_VERSION = "research_fix_2026_08_03_v55"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v61_deribit_rest_ticker_bootstrap"
+ENGINE_PATCH_VERSION = "v62_deribit_core_refresh_scheduler"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -207,6 +207,35 @@ v61 therefore:
 - leaves the research core, readiness threshold, freshness, MOS formulas,
   databases, manual entries, and Particle Logic unchanged.
 
+## Deribit core refresh scheduler v12
+
+The first v61 collector-host run reached 169 complete core contracts and
+entered `status = ok`. After roughly 998 seconds it had cached 783 complete
+contracts, but all 240 core snapshots had expired from the five-minute fresh
+window while the sequential bootstrap was still traversing the chain. The
+second smoke request therefore returned zero usable core contracts even though
+Deribit and the REST bootstrap remained healthy.
+
+v62 therefore:
+
+- runs the REST ticker bootstrap as a continuous refresh scheduler instead of
+  a finite sequential full-chain pass;
+- spends all REST capacity on the 240-contract core until fresh complete
+  coverage reaches 70%;
+- after warmup, reserves nine refresh batches for core maintenance for every
+  one rotating tail batch;
+- refreshes aging core observations from 60 seconds onward so the slow host
+  has time to revisit them before the strict five-minute TTL;
+- uses fair round-robin cursors so missing or quiet contracts cannot pin the
+  scheduler on the same instruments;
+- accepts updated instrument/core universes without starting a second task;
+- makes the smoke endpoint report the current cache immediately instead of
+  waiting up to 120 seconds;
+- distinguishes the last actual WebSocket ticker time from REST-bootstrap
+  success time in diagnostics;
+- leaves cache TTL, readiness threshold, MOS formulas, database schemas,
+  manual entries, and Particle Logic scoring unchanged.
+
 ## Latest validated v20 database
 
 Latest validated database showed approximately:
@@ -281,6 +310,8 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v54 to the collector without clearing databases, run the Deribit smoke
-test, and verify that both Bybit and Deribit contract rows reach the next
-five-minute history snapshot. Do not promote contract particles into scoring.
+Deploy v55/v62 to the collector without clearing databases, allow the core to
+warm for three to five minutes, and verify that core coverage stays above 70%
+across repeated smoke checks separated by at least ten minutes. Then verify
+that both Bybit and Deribit contract rows reach the next five-minute history
+snapshot. Do not promote contract particles into scoring.

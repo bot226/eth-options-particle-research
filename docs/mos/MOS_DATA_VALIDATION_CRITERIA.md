@@ -58,8 +58,8 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-For v61 Deribit collection, the smoke test must report after the REST ticker
-bootstrap reaches safe research-core coverage:
+For v62 Deribit collection, allow three to five minutes for initial core
+warmup, then the non-blocking smoke test must report:
 
 ```text
 status = ok
@@ -79,7 +79,13 @@ deribit_ws_core_instruments_count > 0
 deribit_ws_core_fresh_tickers / deribit_ws_core_instruments_count >= 0.7
 deribit_ws_core_full_tickers / deribit_ws_core_instruments_count >= 0.7
 deribit_ws_bootstrap_state = running or complete
+deribit_ws_bootstrap_phase = maintaining_core or backfilling_chain
+deribit_ws_bootstrap_policy = core_9_to_tail_1_round_robin
 deribit_ws_bootstrap_success_count > 0
+deribit_ws_bootstrap_core_request_count > 0
+deribit_ws_bootstrap_tail_request_count >= 0
+deribit_ws_bootstrap_core_batches_per_tail_batch = 9
+deribit_ws_bootstrap_core_refresh_age_sec = 60
 deribit_ws_bootstrap_cycle_target_count <= deribit_ws_bootstrap_target_count
 ```
 
@@ -87,6 +93,10 @@ deribit_ws_bootstrap_cycle_target_count <= deribit_ws_bootstrap_target_count
 `deribit_ws_chain_coverage_ratio` separately reports how much of the full
 discovered chain is fresh. Full-chain bootstrap may continue after the core is
 usable and must not block MOS polling.
+
+Repeat the smoke check after at least ten minutes without restarting MOS. Core
+coverage must remain at or above 70%. A growing total cache with core coverage
+falling to zero is a scheduler failure and invalidates that collection window.
 
 After the next five-minute structural snapshot, verify that source-level rows
 exist for both exchanges:

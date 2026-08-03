@@ -38,8 +38,10 @@ _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
 _TICKER_BOOTSTRAP_START_DELAY_SEC = 5.0
 _TICKER_BOOTSTRAP_BATCH_SIZE = 2
 _TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC = 1.0
-_TICKER_BOOTSTRAP_MAX_PASSES = 4
 _TICKER_BOOTSTRAP_MAX_EMPTY_BATCHES = 3
+_TICKER_CORE_REFRESH_AGE_SEC = 60.0
+_TICKER_CORE_BATCHES_PER_TAIL_BATCH = 9
+_TICKER_BOOTSTRAP_IDLE_SEC = 1.0
 
 
 class DeribitAdapter(BaseExchangeAdapter):
@@ -54,6 +56,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         )
         self._ws_task: Optional[asyncio.Task] = None
         self._ticker_bootstrap_task: Optional[asyncio.Task] = None
+        self._ticker_bootstrap_instrument_names: list[str] = []
         self._tickers_cache: list[dict] = []
         self._ticker_cache_by_instrument: dict[str, dict] = {}
         self._ticker_received_ts_by_instrument: dict[str, float] = {}
@@ -73,12 +76,16 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_last_subscription_refresh_ts: float = 0.0
         self._ws_subscription_error_count: int = 0
         self._ticker_bootstrap_state: str = "idle"
+        self._ticker_bootstrap_phase: str = "idle"
         self._ticker_bootstrap_target_count: int = 0
         self._ticker_bootstrap_cycle_target_count: int = 0
         self._ticker_bootstrap_request_count: int = 0
         self._ticker_bootstrap_success_count: int = 0
         self._ticker_bootstrap_error_count: int = 0
         self._ticker_bootstrap_last_error: str = ""
+        self._ticker_bootstrap_last_success_ts: float = 0.0
+        self._ticker_bootstrap_core_request_count: int = 0
+        self._ticker_bootstrap_tail_request_count: int = 0
         self._ticker_bootstrap_started_ts: float = 0.0
         self._ticker_bootstrap_completed_ts: float = 0.0
         self._spot_price: float = 0.0
@@ -580,23 +587,19 @@ class DeribitAdapter(BaseExchangeAdapter):
         )
 
     def _ensure_ticker_bootstrap(self, instrument_names: list[str]) -> None:
-        """Start one independent, rate-limited full-ticker bootstrap task."""
-        missing = [
-            name
-            for name in instrument_names
-            if not self._ticker_has_fresh_full_option_data(name)
-        ]
-        if not missing:
-            if self._ticker_bootstrap_state != "running":
-                self._ticker_bootstrap_state = "complete"
-            return
+        """Keep one rate-limited core-first refresh scheduler running."""
+        self._ticker_bootstrap_instrument_names = list(dict.fromkeys(
+            instrument_names
+        ))
         if (
             self._ticker_bootstrap_task is not None
             and not self._ticker_bootstrap_task.done()
         ):
             return
         self._ticker_bootstrap_task = asyncio.create_task(
-            self._bootstrap_full_tickers(list(instrument_names))
+            self._bootstrap_full_tickers(
+                list(self._ticker_bootstrap_instrument_names)
+            )
         )
 
     def _bootstrap_refresh_baselines(
@@ -610,13 +613,48 @@ class DeribitAdapter(BaseExchangeAdapter):
             if not self._ticker_has_fresh_full_option_data(name)
         }
 
+    def _next_ticker_refresh_batch(
+        self,
+        instrument_names: list[str],
+        cursor: int,
+        *,
+        max_age_sec: float,
+    ) -> tuple[list[str], int]:
+        """Select one fair round-robin batch of missing or aging tickers."""
+        if not instrument_names:
+            return [], 0
+
+        batch = []
+        index = cursor % len(instrument_names)
+        now = time.time()
+        for _ in range(len(instrument_names)):
+            instrument_name = instrument_names[index]
+            index = (index + 1) % len(instrument_names)
+            received_ts = self._ticker_received_ts_by_instrument.get(
+                instrument_name, 0.0
+            )
+            if (
+                not self._ticker_has_full_option_data(instrument_name)
+                or now - received_ts >= max_age_sec
+            ):
+                batch.append(instrument_name)
+                if len(batch) >= _TICKER_BOOTSTRAP_BATCH_SIZE:
+                    break
+        return batch, index
+
     async def _bootstrap_full_tickers(
         self,
         instrument_names: list[str],
     ) -> None:
-        """Seed full IV/volume/Greeks snapshots without blocking MOS polling."""
+        """Continuously maintain core freshness and rotate through the tail."""
+        self._ticker_bootstrap_instrument_names = list(dict.fromkeys(
+            instrument_names
+        ))
         self._ticker_bootstrap_state = "running"
-        self._ticker_bootstrap_target_count = len(instrument_names)
+        self._ticker_bootstrap_phase = "starting"
+        self._ticker_bootstrap_target_count = len(
+            self._ticker_bootstrap_instrument_names
+        )
         self._ticker_bootstrap_started_ts = time.time()
         self._ticker_bootstrap_completed_ts = 0.0
         self._ticker_bootstrap_last_error = ""
@@ -624,64 +662,104 @@ class DeribitAdapter(BaseExchangeAdapter):
 
         try:
             await asyncio.sleep(_TICKER_BOOTSTRAP_START_DELAY_SEC)
-            refresh_baselines = self._bootstrap_refresh_baselines(
-                instrument_names
-            )
-            self._ticker_bootstrap_cycle_target_count = len(
-                refresh_baselines
-            )
-            for pass_index in range(_TICKER_BOOTSTRAP_MAX_PASSES):
-                missing = [
-                    name
-                    for name, baseline_ts in refresh_baselines.items()
-                    if (
-                        not self._ticker_has_full_option_data(name)
-                        or self._ticker_received_ts_by_instrument.get(
-                            name, 0.0
-                        ) <= baseline_ts
-                    )
+            core_cursor = 0
+            tail_cursor = 0
+            core_batches_since_tail = 0
+            empty_batches = 0
+
+            while self._running:
+                active_names = list(self._ticker_bootstrap_instrument_names)
+                core_set = self._ws_core_instrument_names
+                core_names = [
+                    name for name in active_names if name in core_set
                 ]
-                if not missing or not self._running:
-                    break
-
-                empty_batches = 0
-                for offset in range(
-                    0, len(missing), _TICKER_BOOTSTRAP_BATCH_SIZE
-                ):
-                    if not self._running:
-                        break
-                    batch = missing[
-                        offset:offset + _TICKER_BOOTSTRAP_BATCH_SIZE
-                    ]
-                    successes = await self._bootstrap_ticker_rest_batch(batch)
-                    empty_batches = 0 if successes else empty_batches + 1
-                    if empty_batches >= _TICKER_BOOTSTRAP_MAX_EMPTY_BATCHES:
-                        await asyncio.sleep(5.0)
-                        empty_batches = 0
-                    if offset + _TICKER_BOOTSTRAP_BATCH_SIZE < len(missing):
-                        await asyncio.sleep(
-                            _TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC
-                            * (2 if successes < len(batch) else 1)
-                        )
-
-                if pass_index + 1 < _TICKER_BOOTSTRAP_MAX_PASSES:
-                    await asyncio.sleep(5.0)
-
-            missing_count = sum(
-                (
-                    not self._ticker_has_full_option_data(name)
-                    or self._ticker_received_ts_by_instrument.get(
-                        name, 0.0
-                    ) <= baseline_ts
+                tail_names = [
+                    name for name in active_names if name not in core_set
+                ]
+                self._ticker_bootstrap_target_count = len(active_names)
+                self._ticker_bootstrap_cycle_target_count = sum(
+                    not self._ticker_has_fresh_full_option_data(name)
+                    for name in active_names
                 )
-                for name, baseline_ts in refresh_baselines.items()
-            )
-            self._ticker_bootstrap_state = (
-                "complete" if missing_count == 0 else "degraded"
-            )
+
+                core_ready = self._has_sufficient_ticker_coverage()
+                prefer_tail = (
+                    core_ready
+                    and core_batches_since_tail
+                    >= _TICKER_CORE_BATCHES_PER_TAIL_BATCH
+                )
+                batch: list[str] = []
+                lane = "core"
+
+                if prefer_tail:
+                    batch, tail_cursor = self._next_ticker_refresh_batch(
+                        tail_names,
+                        tail_cursor,
+                        max_age_sec=_WS_TICKER_CACHE_MAX_AGE_SEC,
+                    )
+                    if batch:
+                        lane = "tail"
+                        core_batches_since_tail = 0
+
+                if not batch:
+                    batch, core_cursor = self._next_ticker_refresh_batch(
+                        core_names,
+                        core_cursor,
+                        max_age_sec=_TICKER_CORE_REFRESH_AGE_SEC,
+                    )
+                    if batch:
+                        lane = "core"
+                        core_batches_since_tail += 1
+
+                if not batch and not prefer_tail and core_ready:
+                    batch, tail_cursor = self._next_ticker_refresh_batch(
+                        tail_names,
+                        tail_cursor,
+                        max_age_sec=_WS_TICKER_CACHE_MAX_AGE_SEC,
+                    )
+                    if batch:
+                        lane = "tail"
+                        core_batches_since_tail = 0
+
+                if not batch:
+                    self._ticker_bootstrap_phase = (
+                        "maintaining_core" if core_ready else "warming_core"
+                    )
+                    await asyncio.sleep(_TICKER_BOOTSTRAP_IDLE_SEC)
+                    continue
+
+                self._ticker_bootstrap_phase = (
+                    "warming_core"
+                    if not core_ready
+                    else "backfilling_chain"
+                    if lane == "tail"
+                    else "maintaining_core"
+                )
+                if lane == "core":
+                    self._ticker_bootstrap_core_request_count += len(batch)
+                else:
+                    self._ticker_bootstrap_tail_request_count += len(batch)
+
+                successes = await self._bootstrap_ticker_rest_batch(batch)
+                empty_batches = 0 if successes else empty_batches + 1
+                if empty_batches >= _TICKER_BOOTSTRAP_MAX_EMPTY_BATCHES:
+                    await asyncio.sleep(5.0)
+                    empty_batches = 0
+                await asyncio.sleep(
+                    _TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC
+                    * (2 if successes < len(batch) else 1)
+                )
         except asyncio.CancelledError:
             self._ticker_bootstrap_state = "cancelled"
+            self._ticker_bootstrap_phase = "cancelled"
             raise
+        except Exception as exc:
+            self._ticker_bootstrap_state = "degraded"
+            self._ticker_bootstrap_phase = "failed"
+            self._ticker_bootstrap_last_error = (
+                f"bootstrap_scheduler_error:{exc}"
+            )
+            log.exception("Deribit ticker refresh scheduler failed")
         finally:
             self._ticker_bootstrap_completed_ts = time.time()
 
@@ -709,6 +787,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                 stream_message=False,
             )
             self._ticker_bootstrap_success_count += 1
+            self._ticker_bootstrap_last_success_ts = time.time()
             self._ticker_bootstrap_last_error = ""
             return True
 
@@ -826,8 +905,8 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ticker_cache_by_instrument[instrument_name] = ticker
         self._ticker_received_ts_by_instrument[instrument_name] = now
         self._tickers_cache_ts = now
-        self._ws_last_ticker_ts = now
         if stream_message:
+            self._ws_last_ticker_ts = now
             self._ws_ticker_message_count += 1
         self._ticker_cache_ready.set()
         self.last_success_ts = now
@@ -921,6 +1000,7 @@ class DeribitAdapter(BaseExchangeAdapter):
 
     def get_diagnostics(self) -> dict:
         """Return explicit diagnostics for Deribit status."""
+        now = time.time()
         fresh_names = self._fresh_ticker_names()
         core_names = self._ws_core_instrument_names
         fresh_core_names = fresh_names.intersection(core_names)
@@ -942,6 +1022,11 @@ class DeribitAdapter(BaseExchangeAdapter):
             if core_count > 0
             else 0.0
         )
+        core_ticker_ages = [
+            now - self._ticker_received_ts_by_instrument.get(name, 0.0)
+            for name in core_names
+            if self._ticker_has_full_option_data(name)
+        ]
         return {
             "deribit_enabled_config": self.enabled_config,
             "deribit_adapter_initialized": self.initialized,
@@ -991,7 +1076,14 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_ws_full_tickers": full_ticker_count,
             "deribit_ws_fresh_full_tickers": fresh_full_ticker_count,
             "deribit_ws_core_full_tickers": full_core_ticker_count,
+            "deribit_ws_core_oldest_ticker_age_sec": (
+                round(max(core_ticker_ages), 3)
+                if core_ticker_ages
+                else None
+            ),
             "deribit_ws_bootstrap_state": self._ticker_bootstrap_state,
+            "deribit_ws_bootstrap_phase": self._ticker_bootstrap_phase,
+            "deribit_ws_bootstrap_policy": "core_9_to_tail_1_round_robin",
             "deribit_ws_bootstrap_target_count": self._ticker_bootstrap_target_count,
             "deribit_ws_bootstrap_cycle_target_count": (
                 self._ticker_bootstrap_cycle_target_count
@@ -999,6 +1091,18 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_ws_bootstrap_request_count": self._ticker_bootstrap_request_count,
             "deribit_ws_bootstrap_success_count": self._ticker_bootstrap_success_count,
             "deribit_ws_bootstrap_error_count": self._ticker_bootstrap_error_count,
+            "deribit_ws_bootstrap_core_request_count": (
+                self._ticker_bootstrap_core_request_count
+            ),
+            "deribit_ws_bootstrap_tail_request_count": (
+                self._ticker_bootstrap_tail_request_count
+            ),
+            "deribit_ws_bootstrap_core_batches_per_tail_batch": (
+                _TICKER_CORE_BATCHES_PER_TAIL_BATCH
+            ),
+            "deribit_ws_bootstrap_core_refresh_age_sec": (
+                _TICKER_CORE_REFRESH_AGE_SEC
+            ),
             "deribit_ws_bootstrap_pending_tickers": max(
                 0,
                 self._ticker_bootstrap_target_count - full_ticker_count,
@@ -1008,6 +1112,9 @@ class DeribitAdapter(BaseExchangeAdapter):
                 core_count - full_core_ticker_count,
             ),
             "deribit_ws_bootstrap_last_error": self._ticker_bootstrap_last_error,
+            "deribit_ws_bootstrap_last_success_ts": (
+                self._ticker_bootstrap_last_success_ts
+            ),
             "deribit_ws_bootstrap_elapsed_sec": (
                 round(
                     (

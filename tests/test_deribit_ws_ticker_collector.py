@@ -244,6 +244,169 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             for name in instrument_names[100:]
         ))
 
+    def test_round_robin_refresh_batch_skips_recent_core_tickers(self):
+        instrument_names = [
+            f"BTC-14AUG26-{60_000 + index}-C"
+            for index in range(4)
+        ]
+        for name in instrument_names:
+            self.adapter._store_ticker_snapshot(
+                {
+                    "instrument_name": name,
+                    "mark_iv": 55.0,
+                    "greeks": {
+                        "delta": 0.4,
+                        "gamma": 0.00003,
+                        "vega": 15.0,
+                        "theta": -6.0,
+                    },
+                },
+                stream_message=False,
+            )
+        self.adapter._ticker_received_ts_by_instrument[
+            instrument_names[1]
+        ] = time.time() - 61
+        self.adapter._ticker_received_ts_by_instrument[
+            instrument_names[3]
+        ] = time.time() - 61
+
+        batch, cursor = self.adapter._next_ticker_refresh_batch(
+            instrument_names,
+            0,
+            max_age_sec=60.0,
+        )
+
+        self.assertEqual(batch, [instrument_names[1], instrument_names[3]])
+        self.assertEqual(cursor, 0)
+
+    async def test_refresh_scheduler_reserves_nine_batches_for_core(self):
+        core_names = [
+            f"BTC-14AUG26-{60_000 + index}-C"
+            for index in range(20)
+        ]
+        tail_names = [
+            f"BTC-21AUG26-{70_000 + index}-P"
+            for index in range(4)
+        ]
+        self.adapter._ws_instruments_count = len(core_names) + len(tail_names)
+        self.adapter._ws_core_instrument_names = set(core_names)
+        for name in core_names:
+            self.adapter._store_ticker_snapshot(
+                {
+                    "instrument_name": name,
+                    "mark_iv": 55.0,
+                    "greeks": {
+                        "delta": 0.4,
+                        "gamma": 0.00003,
+                        "vega": 15.0,
+                        "theta": -6.0,
+                    },
+                },
+                stream_message=False,
+            )
+            self.adapter._ticker_received_ts_by_instrument[name] = (
+                time.time() - 61
+            )
+
+        batches = []
+
+        async def record_batch(instrument_names):
+            batches.append(list(instrument_names))
+            if len(batches) >= 10:
+                self.adapter._running = False
+            return len(instrument_names)
+
+        self.adapter._running = True
+        with (
+            patch(
+                "api.deribit_adapter._TICKER_BOOTSTRAP_START_DELAY_SEC",
+                0.0,
+            ),
+            patch(
+                "api.deribit_adapter._TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC",
+                0.0,
+            ),
+            patch.object(
+                self.adapter,
+                "_bootstrap_ticker_rest_batch",
+                side_effect=record_batch,
+            ),
+        ):
+            await self.adapter._bootstrap_full_tickers(
+                core_names + tail_names
+            )
+
+        self.assertEqual(len(batches), 10)
+        self.assertTrue(all(
+            set(batch).issubset(set(core_names))
+            for batch in batches[:9]
+        ))
+        self.assertTrue(set(batches[9]).issubset(set(tail_names)))
+        diagnostics = self.adapter.get_diagnostics()
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_core_request_count"],
+            18,
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_tail_request_count"],
+            2,
+        )
+        self.assertEqual(
+            diagnostics["deribit_ws_bootstrap_policy"],
+            "core_9_to_tail_1_round_robin",
+        )
+
+    async def test_refresh_scheduler_does_not_backfill_before_core_ready(self):
+        core_names = [
+            f"BTC-14AUG26-{60_000 + index}-C"
+            for index in range(10)
+        ]
+        tail_names = [
+            f"BTC-21AUG26-{70_000 + index}-P"
+            for index in range(4)
+        ]
+        self.adapter._ws_instruments_count = len(core_names) + len(tail_names)
+        self.adapter._ws_core_instrument_names = set(core_names)
+        batches = []
+
+        async def record_batch(instrument_names):
+            batches.append(list(instrument_names))
+            if len(batches) >= 3:
+                self.adapter._running = False
+            return len(instrument_names)
+
+        self.adapter._running = True
+        with (
+            patch(
+                "api.deribit_adapter._TICKER_BOOTSTRAP_START_DELAY_SEC",
+                0.0,
+            ),
+            patch(
+                "api.deribit_adapter._TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC",
+                0.0,
+            ),
+            patch.object(
+                self.adapter,
+                "_bootstrap_ticker_rest_batch",
+                side_effect=record_batch,
+            ),
+        ):
+            await self.adapter._bootstrap_full_tickers(
+                core_names + tail_names
+            )
+
+        self.assertEqual(len(batches), 3)
+        self.assertTrue(all(
+            set(batch).issubset(set(core_names))
+            for batch in batches
+        ))
+        self.assertEqual(
+            self.adapter.get_diagnostics()[
+                "deribit_ws_bootstrap_tail_request_count"
+            ],
+            0,
+        )
+
     async def test_concurrent_instrument_discovery_uses_one_rest_request(self):
         instruments = [
             {"instrument_name": "BTC-14AUG26-65000-C"},

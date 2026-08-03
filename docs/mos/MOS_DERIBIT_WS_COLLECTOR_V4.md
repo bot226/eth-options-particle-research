@@ -1,4 +1,4 @@
-# MOS Deribit WebSocket Option Ticker Collector v4/v5/v6/v7/v8/v9/v10/v11
+# MOS Deribit WebSocket Option Ticker Collector v4-v12
 
 ## Why it exists
 
@@ -40,6 +40,9 @@ underlying and option prices, plus nested delta, gamma, vega, and theta.
 - Diagnostics expose both pending requests and pending ticker counts.
 - The active instrument set is refreshed every 15 minutes.
 - Existing MOS formulas and Particle Logic scoring are unchanged.
+- Before 70% core readiness, REST capacity is dedicated to the core. After
+  readiness, the scheduler alternates nine core batches with one rotating
+  full-chain tail batch.
 
 ## Deployment check
 
@@ -54,6 +57,8 @@ The response should show `status: ok`, positive ticker and Greek counts, and
 `deribit_ticker_bootstrap_transport: rest_public_ticker`.
 `deribit_ws_cache_coverage_ratio` reports core readiness, while
 `deribit_ws_chain_coverage_ratio` reports full-chain backfill progress.
+The endpoint reports the current cache immediately; it does not wait for a
+120-second warmup window.
 
 No database cleanup is required. Existing Bybit-only rows remain valid and the
 first mixed-source row establishes the Deribit activation boundary.
@@ -124,3 +129,18 @@ temporary bootstrap WebSocket closed without a close frame. It completed only
 keeps the live subscription WebSocket and moves only the one-time full-ticker
 bootstrap to lightweight per-instrument REST `public/ticker` calls, two at a
 time through the existing persistent HTTP client.
+
+## v61 smoke-test result and v62 core maintenance
+
+v61 first reached `status = ok` with 169 complete core contracts, valid IV and
+Greeks, 88 calls, 81 puts, and 13 expiries. The long sequential chain pass then
+cached 783 contracts over about 998 seconds, but its first 240 core snapshots
+aged beyond the strict five-minute TTL. Core coverage fell from 70.4% to zero
+while the bootstrap continued succeeding.
+
+v62 replaces the finite chain pass with a continuous weighted scheduler. Until
+core readiness, it requests core contracts only. Afterwards it sends nine
+round-robin core batches for every one tail batch, begins revisiting core
+contracts after 60 seconds, and preserves the strict five-minute rejection of
+stale data. Diagnostics expose the active scheduler phase, core/tail request
+counts, policy, refresh age, and the last REST-bootstrap success timestamp.
