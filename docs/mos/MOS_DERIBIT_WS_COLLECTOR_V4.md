@@ -1,4 +1,4 @@
-# MOS Deribit WebSocket Option Ticker Collector v4-v12
+# MOS Deribit WebSocket Option Ticker Collector v4-v13
 
 ## Why it exists
 
@@ -144,3 +144,20 @@ round-robin core batches for every one tail batch, begins revisiting core
 contracts after 60 seconds, and preserves the strict five-minute rejection of
 stale data. Diagnostics expose the active scheduler phase, core/tail request
 counts, policy, refresh age, and the last REST-bootstrap success timestamp.
+
+## v62 long-run result and v63 liveness watchdog
+
+v62 first reached 730 fresh complete contracts with full 240-contract core
+coverage. Later, the adapter still showed 240 confirmed subscriptions and all
+866 contracts cached, but only 100 core contracts were fresh. No real
+WebSocket ticker had arrived for about 20 minutes and subscription maintenance
+had not run for about 30 minutes. The connection had become logically dead
+without producing a normal close event.
+
+v63 supervises the receiver and subscription-maintenance tasks together. Once
+ticker subscriptions are acknowledged, 60 seconds without an actual
+incremental ticker message raises a liveness failure, closes the old lifecycle,
+and reconnects/resubscribes. Diagnostics expose receiver state, ticker idle
+age, connection and reconnect counters, idle reconnects, refresh-loop errors,
+and whether the refresh task is currently running. REST snapshots do not reset
+the WebSocket liveness clock.

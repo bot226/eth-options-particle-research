@@ -32,6 +32,11 @@ class _FakeWebSocket:
             })
 
 
+class _SilentWebSocket:
+    async def recv(self):
+        await asyncio.sleep(1.0)
+
+
 class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.adapter = DeribitAdapter()
@@ -479,6 +484,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(len(self.adapter._subscribed_ticker_channels), 240)
         self.assertEqual(self.adapter._pending_ticker_channels, {})
+        self.assertGreater(self.adapter._ws_ticker_watch_started_ts, 0.0)
         self.assertNotIn(
             "BTC-3AUG26-40000-P",
             self.adapter._ticker_cache_by_instrument,
@@ -608,6 +614,79 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
                 ),
                 60,
             )
+
+    def test_ticker_idle_watchdog_starts_only_after_subscription_ack(self):
+        now = time.time()
+        self.assertFalse(self.adapter._is_ws_ticker_stream_idle(now=now))
+
+        self.adapter._subscribed_ticker_channels.add(
+            "incremental_ticker.BTC-14AUG26-65000-C"
+        )
+        self.adapter._ws_ticker_watch_started_ts = now - 61.0
+        self.assertTrue(self.adapter._is_ws_ticker_stream_idle(now=now))
+
+        self.adapter._ws_last_ticker_ts = now
+        self.assertFalse(self.adapter._is_ws_ticker_stream_idle(now=now))
+
+    async def test_silent_ticker_stream_forces_reconnect(self):
+        self.adapter._running = True
+        self.adapter._subscribed_ticker_channels.add(
+            "incremental_ticker.BTC-14AUG26-65000-C"
+        )
+        self.adapter._ws_ticker_watch_started_ts = time.time() - 1.0
+
+        with patch(
+            "api.deribit_adapter._WS_RECEIVE_POLL_SEC",
+            0.001,
+        ), patch(
+            "api.deribit_adapter._WS_TICKER_IDLE_TIMEOUT_SEC",
+            0.01,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "deribit_ws_ticker_idle_timeout",
+            ):
+                await self.adapter._ws_receive_loop(_SilentWebSocket())
+
+        self.assertEqual(self.adapter._ws_idle_reconnect_count, 1)
+        self.assertGreater(self.adapter._ws_last_idle_reconnect_ts, 0.0)
+
+    async def test_subscription_refresh_failure_is_not_silenced(self):
+        self.adapter._running = True
+        with patch.object(
+            self.adapter,
+            "_refresh_ws_option_subscriptions",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                await self.adapter._ws_subscription_refresh_loop(
+                    _FakeWebSocket()
+                )
+
+        self.assertFalse(self.adapter._ws_refresh_task_running)
+        self.assertEqual(self.adapter._ws_refresh_loop_error_count, 1)
+        self.assertEqual(
+            self.adapter.last_error,
+            "ws_refresh_loop_error:boom",
+        )
+
+    async def test_connection_supervisor_reconnects_if_refresh_loop_stops(self):
+        self.adapter._running = True
+
+        async def wait_for_messages(_ws):
+            await asyncio.Event().wait()
+
+        with patch.object(
+            self.adapter,
+            "_ws_receive_loop",
+            new=AsyncMock(side_effect=wait_for_messages),
+        ), patch.object(
+            self.adapter,
+            "_ws_subscription_refresh_loop",
+            new=AsyncMock(side_effect=RuntimeError("refresh stopped")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "refresh stopped"):
+                await self.adapter._supervise_ws_connection(_FakeWebSocket())
 
     async def test_ws_rpc_error_requests_subscription_retry(self):
         self.adapter._subscribed_ticker_channels.add(

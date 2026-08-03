@@ -58,7 +58,7 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-For v62 Deribit collection, allow three to five minutes for initial core
+For v63 Deribit collection, allow three to five minutes for initial core
 warmup, then the non-blocking smoke test must report:
 
 ```text
@@ -87,6 +87,13 @@ deribit_ws_bootstrap_tail_request_count >= 0
 deribit_ws_bootstrap_core_batches_per_tail_batch = 9
 deribit_ws_bootstrap_core_refresh_age_sec = 60
 deribit_ws_bootstrap_cycle_target_count <= deribit_ws_bootstrap_target_count
+deribit_ws_receiver_state = receiving
+deribit_ws_refresh_task_running = true
+deribit_ws_ticker_idle_timeout_sec = 60
+deribit_ws_ticker_idle_age_sec < 60
+deribit_ws_connection_count > 0
+deribit_ws_reconnect_count >= 0
+deribit_ws_idle_reconnect_count >= 0
 ```
 
 `deribit_ws_cache_coverage_ratio` is the readiness ratio for the balanced core.
@@ -94,9 +101,13 @@ deribit_ws_bootstrap_cycle_target_count <= deribit_ws_bootstrap_target_count
 discovered chain is fresh. Full-chain bootstrap may continue after the core is
 usable and must not block MOS polling.
 
-Repeat the smoke check after at least ten minutes without restarting MOS. Core
-coverage must remain at or above 70%. A growing total cache with core coverage
-falling to zero is a scheduler failure and invalidates that collection window.
+Repeat the smoke check after 15 and 30 minutes without restarting MOS. Core
+coverage must remain at or above 70%, the receiver must remain in `receiving`,
+and ticker idle age must stay below 60 seconds. If the stream stalls, the
+connection/reconnect counters and `deribit_ws_idle_reconnect_count` must
+increase, then idle age and core coverage must recover. A growing total cache
+with stale core coverage and no reconnect is a liveness failure and invalidates
+that collection window.
 
 After the next five-minute structural snapshot, verify that source-level rows
 exist for both exchanges:

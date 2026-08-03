@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v55"
+CODE_VERSION = "research_fix_2026_08_03_v56"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v62_deribit_core_refresh_scheduler"
+ENGINE_PATCH_VERSION = "v63_deribit_ws_liveness_watchdog"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -236,6 +236,28 @@ v62 therefore:
 - leaves cache TTL, readiness threshold, MOS formulas, database schemas,
   manual entries, and Particle Logic scoring unchanged.
 
+## Deribit WebSocket liveness watchdog v13
+
+v62 initially reached 730 fresh complete contracts and all 240 core contracts,
+but a later smoke check found a zombie WebSocket: the cache still contained all
+866 contracts while only 100 core tickers remained fresh. The last actual
+WebSocket ticker was about 20 minutes old and the last subscription refresh was
+about 30 minutes old, although the adapter still reported 240 confirmed
+subscriptions. REST maintenance alone could not keep the core above 70%.
+
+v63 therefore:
+
+- supervises the WebSocket receiver and subscription-refresh task as one
+  connection lifecycle, so either task ending forces reconnection;
+- starts a ticker liveness clock only after a ticker subscription is confirmed;
+- forces reconnection and complete resubscription after 60 seconds without an
+  actual incremental ticker message;
+- distinguishes REST cache writes from real WebSocket activity;
+- exposes receiver state, connection/reconnect counts, idle age, idle timeout,
+  idle-reconnect count, and refresh-task health in diagnostics;
+- leaves the REST core scheduler, five-minute data TTL, readiness threshold,
+  MOS formulas, database schemas, manual entries, and Particle Logic unchanged.
+
 ## Latest validated v20 database
 
 Latest validated database showed approximately:
@@ -310,8 +332,9 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v55/v62 to the collector without clearing databases, allow the core to
-warm for three to five minutes, and verify that core coverage stays above 70%
-across repeated smoke checks separated by at least ten minutes. Then verify
+Deploy v56/v63 to the collector without clearing databases, allow the core to
+warm for three to five minutes, and verify that the WebSocket ticker idle age
+stays below 60 seconds and core coverage stays above 70% across smoke checks at
+15 and 30 minutes. Then verify
 that both Bybit and Deribit contract rows reach the next five-minute history
 snapshot. Do not promote contract particles into scoring.

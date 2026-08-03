@@ -35,6 +35,8 @@ _WS_INSTRUMENT_RETRY_SEC = 30
 _INSTRUMENT_CACHE_TTL_SEC = 15 * 60
 _WS_TICKER_CACHE_MAX_AGE_SEC = 5 * 60
 _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
+_WS_TICKER_IDLE_TIMEOUT_SEC = 60.0
+_WS_RECEIVE_POLL_SEC = 5.0
 _TICKER_BOOTSTRAP_START_DELAY_SEC = 5.0
 _TICKER_BOOTSTRAP_BATCH_SIZE = 2
 _TICKER_BOOTSTRAP_BATCH_INTERVAL_SEC = 1.0
@@ -75,6 +77,15 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_last_ticker_ts: float = 0.0
         self._ws_last_subscription_refresh_ts: float = 0.0
         self._ws_subscription_error_count: int = 0
+        self._ws_ticker_watch_started_ts: float = 0.0
+        self._ws_last_idle_reconnect_ts: float = 0.0
+        self._ws_connection_started_ts: float = 0.0
+        self._ws_connection_count: int = 0
+        self._ws_reconnect_count: int = 0
+        self._ws_idle_reconnect_count: int = 0
+        self._ws_refresh_loop_error_count: int = 0
+        self._ws_refresh_task_running: bool = False
+        self._ws_receiver_state: str = "idle"
         self._ticker_bootstrap_state: str = "idle"
         self._ticker_bootstrap_phase: str = "idle"
         self._ticker_bootstrap_target_count: int = 0
@@ -335,6 +346,10 @@ class DeribitAdapter(BaseExchangeAdapter):
                 ) as ws:
                     attempt = 0  # reset on successful connect
                     self.health.ws_connected = True
+                    self._ws_connection_count += 1
+                    self._ws_connection_started_ts = time.time()
+                    self._ws_ticker_watch_started_ts = 0.0
+                    self._ws_receiver_state = "receiving"
                     self._subscribed_ticker_channels.clear()
                     self._pending_ticker_channels.clear()
                     for waiter in self._subscription_ack_waiters.values():
@@ -347,57 +362,116 @@ class DeribitAdapter(BaseExchangeAdapter):
                     await self._ws_subscribe(ws, [
                         "deribit_price_index.btc_usd",
                     ])
-                    refresh_task = asyncio.create_task(
-                        self._ws_subscription_refresh_loop(ws)
-                    )
-                    try:
-                        async for message in ws:
-                            if not self._running:
-                                break
-                            try:
-                                msg = json.loads(message)
-                                await self._handle_ws_message(msg)
-                            except Exception as e:
-                                log.debug("Deribit WS message error: %s", e)
-                    finally:
-                        refresh_task.cancel()
-                        try:
-                            await refresh_task
-                        except asyncio.CancelledError:
-                            pass
+                    await self._supervise_ws_connection(ws)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 log.error("Deribit WS error: %s", e)
+                self._ws_receiver_state = "reconnecting"
                 self.health.ws_connected = False
                 self.health.mark_error(str(e))
 
             if self._running:
                 attempt += 1
+                self._ws_reconnect_count += 1
                 log.info("Deribit WS reconnecting in %.0fs (attempt %d)...",
                          delay, attempt)
                 await asyncio.sleep(delay)
 
         self.health.ws_connected = False
+        self._ws_receiver_state = "stopped"
+
+    async def _supervise_ws_connection(self, ws) -> None:
+        """Reconnect when either receiving or subscription maintenance stops."""
+        receive_task = asyncio.create_task(self._ws_receive_loop(ws))
+        refresh_task = asyncio.create_task(
+            self._ws_subscription_refresh_loop(ws)
+        )
+        tasks = (receive_task, refresh_task)
+        done = set()
+        try:
+            done, _ = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        for task in done:
+            task.result()
+        if self._running:
+            raise RuntimeError("deribit_ws_background_task_stopped")
+
+    def _is_ws_ticker_stream_idle(self, now: Optional[float] = None) -> bool:
+        """Return whether confirmed ticker subscriptions stopped producing."""
+        if not self._subscribed_ticker_channels:
+            return False
+        reference_ts = max(
+            self._ws_ticker_watch_started_ts,
+            self._ws_last_ticker_ts,
+        )
+        if reference_ts <= 0:
+            return False
+        current_ts = time.time() if now is None else now
+        return current_ts - reference_ts >= _WS_TICKER_IDLE_TIMEOUT_SEC
+
+    async def _ws_receive_loop(self, ws) -> None:
+        """Receive messages and fail closed when the ticker stream goes idle."""
+        while self._running:
+            try:
+                message = await asyncio.wait_for(
+                    ws.recv(),
+                    timeout=_WS_RECEIVE_POLL_SEC,
+                )
+            except asyncio.TimeoutError:
+                if self._is_ws_ticker_stream_idle():
+                    self._ws_idle_reconnect_count += 1
+                    self._ws_last_idle_reconnect_ts = time.time()
+                    raise RuntimeError(
+                        "deribit_ws_ticker_idle_timeout:"
+                        f">{_WS_TICKER_IDLE_TIMEOUT_SEC:.0f}s"
+                    )
+                continue
+
+            try:
+                msg = json.loads(message)
+                await self._handle_ws_message(msg)
+            except Exception as exc:
+                log.debug("Deribit WS message error: %s", exc)
 
     async def _ws_subscription_refresh_loop(self, ws) -> None:
         """Discover new option instruments and subscribe without blocking reads."""
-        while self._running:
-            refreshed = await self._refresh_ws_option_subscriptions(ws)
-            delay = (
-                _WS_INSTRUMENT_REFRESH_SEC
-                if refreshed
-                else _WS_INSTRUMENT_RETRY_SEC
-            )
-            try:
-                await asyncio.wait_for(
-                    self._ws_subscription_retry_event.wait(),
-                    timeout=delay,
-                )
-                self._ws_subscription_retry_event.clear()
-            except asyncio.TimeoutError:
-                pass
+        self._ws_refresh_task_running = True
+        try:
+            while self._running:
+                try:
+                    refreshed = await self._refresh_ws_option_subscriptions(ws)
+                    delay = (
+                        _WS_INSTRUMENT_REFRESH_SEC
+                        if refreshed
+                        else _WS_INSTRUMENT_RETRY_SEC
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            self._ws_subscription_retry_event.wait(),
+                            timeout=delay,
+                        )
+                        self._ws_subscription_retry_event.clear()
+                    except asyncio.TimeoutError:
+                        pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._ws_refresh_loop_error_count += 1
+                    self.last_error = f"ws_refresh_loop_error:{exc}"
+                    self.last_error_ts = time.time()
+                    raise
+        finally:
+            self._ws_refresh_task_running = False
 
     def _select_core_instrument_names(
         self,
@@ -956,6 +1030,8 @@ class DeribitAdapter(BaseExchangeAdapter):
             )
             acknowledged = set(result_channels).intersection(pending_channels)
             self._subscribed_ticker_channels.update(acknowledged)
+            if acknowledged and self._ws_ticker_watch_started_ts <= 0:
+                self._ws_ticker_watch_started_ts = time.time()
             missing_ack = pending_channels - acknowledged
             if missing_ack:
                 self.last_error = (
@@ -1027,6 +1103,16 @@ class DeribitAdapter(BaseExchangeAdapter):
             for name in core_names
             if self._ticker_has_full_option_data(name)
         ]
+        ticker_watch_reference_ts = max(
+            self._ws_ticker_watch_started_ts,
+            self._ws_last_ticker_ts,
+        )
+        ticker_idle_age_sec = (
+            round(now - ticker_watch_reference_ts, 3)
+            if self._subscribed_ticker_channels
+            and ticker_watch_reference_ts > 0
+            else None
+        )
         return {
             "deribit_enabled_config": self.enabled_config,
             "deribit_adapter_initialized": self.initialized,
@@ -1073,6 +1159,32 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_ws_min_cache_coverage_ratio": _WS_MIN_CACHE_COVERAGE_RATIO,
             "deribit_ws_ticker_message_count": self._ws_ticker_message_count,
             "deribit_ws_subscription_error_count": self._ws_subscription_error_count,
+            "deribit_ws_receiver_state": self._ws_receiver_state,
+            "deribit_ws_connection_count": self._ws_connection_count,
+            "deribit_ws_reconnect_count": self._ws_reconnect_count,
+            "deribit_ws_idle_reconnect_count": self._ws_idle_reconnect_count,
+            "deribit_ws_refresh_loop_error_count": (
+                self._ws_refresh_loop_error_count
+            ),
+            "deribit_ws_refresh_task_running": self._ws_refresh_task_running,
+            "deribit_ws_ticker_idle_timeout_sec": (
+                _WS_TICKER_IDLE_TIMEOUT_SEC
+            ),
+            "deribit_ws_ticker_idle_age_sec": ticker_idle_age_sec,
+            "deribit_ws_ticker_watch_started_ts": (
+                self._ws_ticker_watch_started_ts
+            ),
+            "deribit_ws_last_idle_reconnect_ts": (
+                self._ws_last_idle_reconnect_ts
+            ),
+            "deribit_ws_connection_started_ts": (
+                self._ws_connection_started_ts
+            ),
+            "deribit_ws_current_connection_age_sec": (
+                round(now - self._ws_connection_started_ts, 3)
+                if self._ws_connection_started_ts > 0
+                else None
+            ),
             "deribit_ws_full_tickers": full_ticker_count,
             "deribit_ws_fresh_full_tickers": fresh_full_ticker_count,
             "deribit_ws_core_full_tickers": full_core_ticker_count,
