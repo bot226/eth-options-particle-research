@@ -5,7 +5,7 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v66"
+CODE_VERSION = "research_fix_2026_08_09_v67"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
@@ -33,6 +33,12 @@ that same socket. This avoids false reconnects on collector network paths that
 pass WebSocket data frames while dropping protocol Ping/Pong control frames.
 REST remains only the existing bounded cache-recovery path; no source, formula,
 threshold, database schema, candidate, or execution behavior changed.
+
+v67 sends the same JSON-RPC heartbeat after 20 seconds of socket silence,
+before the collector-host route reaches its approximately 60-second idle
+failure. It also replaces protocol Ping/Pong with `public/test` in the separate
+Deribit option-trade observer. Both collectors remain on direct Deribit
+WebSocket data; REST does not replace either live stream.
 
 ## Particle Logic shadow v1
 
@@ -378,6 +384,24 @@ Research fix v66 therefore:
 - leaves source data, cache freshness, core coverage, formulas, thresholds,
   schemas, candidates, manual entries, and execution behavior unchanged.
 
+## Deribit proactive JSON-RPC keepalive v18
+
+The first collector-host v66 run showed that a heartbeat sent only after 60
+seconds of ticker silence was too late for that network route. Every connection
+received an initial ticker burst, then the heartbeat timed out and the socket
+reconnected.
+
+Research fix v67 therefore:
+
+- sends `public/test` after 20 seconds without a WebSocket data message;
+- keeps the existing 60-second ticker-silence rule for deciding whether the
+  240-contract core needs an in-place resubscription;
+- disables protocol Ping/Pong in the separate Deribit option-trade observer
+  and gives it the same 20-second JSON-RPC keepalive;
+- still reconnects if `public/test` itself fails within ten seconds;
+- leaves direct Deribit subscriptions, raw data, REST recovery limits, formulas,
+  thresholds, schemas, candidates, and execution unchanged.
+
 ## Public option trade-flow observer v68
 
 Research on the first six-day contract-level archive found no durable futures
@@ -529,7 +553,7 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v59/v67 to the collector without clearing databases. Preserve the v66
+Deploy v59/v67 to the collector without clearing databases. Preserve the v67
 heartbeat and core-coverage checks, then validate that `option_trade_flow.db`
 grows, both public trade streams remain subscribed, no queue drops occur and the
 Dataset Exporter includes the optional database. Do not derive or promote a

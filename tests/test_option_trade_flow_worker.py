@@ -1,15 +1,36 @@
+import asyncio
 import json
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from backend.workers.option_trade_flow_worker import (
     OptionTradeFlowStore,
+    OptionTradeFlowCollector,
     bybit_subscription_confirmed,
     normalize_bybit_trade,
     normalize_deribit_trade,
 )
+
+
+class _DeribitApplicationHeartbeatWebSocket:
+    def __init__(self, messages=None):
+        self.messages = list(messages or [])
+        self.request = None
+
+    async def send(self, message):
+        self.request = json.loads(message)
+
+    async def recv(self):
+        if self.messages:
+            return json.dumps(self.messages.pop(0))
+        return json.dumps({
+            "jsonrpc": "2.0",
+            "id": self.request["id"],
+            "result": {"version": "1.2.26"},
+        })
 
 
 class OptionTradeNormalizationTest(unittest.TestCase):
@@ -103,6 +124,42 @@ class OptionTradeNormalizationTest(unittest.TestCase):
     def test_rejects_incomplete_trade(self):
         self.assertIsNone(normalize_bybit_trade({"s": "BTC-25SEP26-70000-C"}))
         self.assertIsNone(normalize_deribit_trade({"trade_id": "1"}))
+
+
+class OptionTradeFlowHeartbeatTest(unittest.IsolatedAsyncioTestCase):
+    async def test_deribit_json_rpc_heartbeat_preserves_trade_notification(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            collector = OptionTradeFlowCollector(
+                Path(temp_dir) / "option_trade_flow.db"
+            )
+            websocket = _DeribitApplicationHeartbeatWebSocket(messages=[{
+                "method": "subscription",
+                "params": {
+                    "channel": "trades.option.BTC.100ms",
+                    "data": [{
+                        "trade_seq": 468,
+                        "trade_id": "heartbeat-trade",
+                        "timestamp": int(time.time() * 1000),
+                        "price": 0.0525,
+                        "iv": 45.91,
+                        "instrument_name": "BTC-25SEP26-65000-P",
+                        "direction": "sell",
+                        "amount": 1,
+                    }],
+                },
+            }])
+            status = collector.statuses["deribit"]
+
+            await collector._deribit_application_heartbeat(
+                websocket,
+                status,
+            )
+
+            self.assertEqual(websocket.request["method"], "public/test")
+            self.assertEqual(status["message_count"], 1)
+            self.assertEqual(status["normalized_trade_count"], 1)
+            self.assertEqual(status["queued_trade_count"], 1)
+            self.assertEqual(collector.queue.qsize(), 1)
 
 
 class OptionTradeFlowStoreTest(unittest.TestCase):

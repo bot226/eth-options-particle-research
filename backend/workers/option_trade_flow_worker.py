@@ -40,6 +40,8 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "option_trade_f
 QUEUE_MAXSIZE = 50_000
 WRITE_BATCH_SIZE = 1_000
 STATUS_FLUSH_SECONDS = 5.0
+DERIBIT_HEARTBEAT_INTERVAL_SECONDS = 20.0
+DERIBIT_HEARTBEAT_TIMEOUT_SECONDS = 10.0
 BACKFILL_MIN_INTERVAL_SECONDS = 300.0
 BYBIT_OPTION_TRADE_TOPIC = "publicTrade.BTC"
 
@@ -419,6 +421,7 @@ class OptionTradeFlowCollector:
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
         self.running = False
         self.last_backfill_utc: dict[str, float] = {"bybit": 0.0, "deribit": 0.0}
+        self.deribit_heartbeat_request_id = 1_000_000
         self.statuses = {
             exchange: {
                 "connection_state": "idle",
@@ -554,8 +557,8 @@ class OptionTradeFlowCollector:
                 status["connection_state"] = "connecting"
                 async with websockets.connect(
                     DERIBIT_WS_URL,
-                    ping_interval=20,
-                    ping_timeout=10,
+                    ping_interval=None,
+                    ping_timeout=None,
                     close_timeout=5,
                     open_timeout=10,
                 ) as websocket:
@@ -583,15 +586,22 @@ class OptionTradeFlowCollector:
                         raise RuntimeError(f"subscription_not_confirmed:{acknowledgement}")
                     status["connection_state"] = "subscribed"
                     await self._backfill(exchange)
-                    async for message in websocket:
-                        payload = json.loads(message)
-                        params = payload.get("params", {})
-                        if params.get("channel") != "trades.option.BTC.100ms":
+                    while self.running:
+                        try:
+                            message = await asyncio.wait_for(
+                                websocket.recv(),
+                                timeout=DERIBIT_HEARTBEAT_INTERVAL_SECONDS,
+                            )
+                        except asyncio.TimeoutError:
+                            await self._deribit_application_heartbeat(
+                                websocket,
+                                status,
+                            )
                             continue
-                        status["message_count"] += 1
-                        status["last_message_utc"] = time.time()
-                        for raw in params.get("data", []):
-                            self._enqueue(exchange, normalize_deribit_trade(raw))
+                        self._handle_deribit_stream_payload(
+                            status,
+                            json.loads(message),
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -600,6 +610,53 @@ class OptionTradeFlowCollector:
                 status["last_error"] = f"{type(exc).__name__}:{exc}"
                 attempt += 1
                 await asyncio.sleep(min(30.0, 2.0**min(attempt, 5)))
+
+    def _handle_deribit_stream_payload(
+        self,
+        status: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> None:
+        params = payload.get("params", {})
+        if params.get("channel") != "trades.option.BTC.100ms":
+            return
+        status["message_count"] += 1
+        status["last_message_utc"] = time.time()
+        for raw in params.get("data", []):
+            self._enqueue("deribit", normalize_deribit_trade(raw))
+
+    async def _deribit_application_heartbeat(
+        self,
+        websocket,
+        status: dict[str, Any],
+    ) -> None:
+        """Keep the direct trade stream alive using Deribit JSON-RPC data."""
+        self.deribit_heartbeat_request_id += 1
+        request_id = self.deribit_heartbeat_request_id
+        await websocket.send(json.dumps({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "public/test",
+            "params": {},
+        }))
+        deadline = asyncio.get_running_loop().time() + (
+            DERIBIT_HEARTBEAT_TIMEOUT_SECONDS
+        )
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            message = await asyncio.wait_for(
+                websocket.recv(),
+                timeout=remaining,
+            )
+            payload = json.loads(message)
+            if payload.get("id") == request_id:
+                if payload.get("error") or "result" not in payload:
+                    raise RuntimeError(
+                        f"heartbeat_rpc_error:{payload.get('error') or payload}"
+                    )
+                return
+            self._handle_deribit_stream_payload(status, payload)
 
     async def _writer_loop(self) -> None:
         last_status_flush = 0.0

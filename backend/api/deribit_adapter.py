@@ -44,6 +44,7 @@ _WS_TICKER_CACHE_MAX_AGE_SEC = 5 * 60
 _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
 _WS_TICKER_IDLE_TIMEOUT_SEC = 60.0
 _WS_RECEIVE_POLL_SEC = 5.0
+_WS_HEARTBEAT_INTERVAL_SEC = 20.0
 _WS_HEARTBEAT_TIMEOUT_SEC = 10.0
 _WS_HEARTBEAT_RECHECK_SEC = 30.0
 _WS_SOFT_RESUBSCRIBE_COOLDOWN_SEC = 5 * 60.0
@@ -822,6 +823,28 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_heartbeat_last_error = ""
         return True
 
+    def _is_ws_heartbeat_due(self, now: Optional[float] = None) -> bool:
+        """Keep the JSON WebSocket path active before network idle expiry."""
+        current_ts = time.time() if now is None else now
+        reference_ts = max(
+            self._ws_connection_started_ts,
+            self._ws_heartbeat_last_attempt_ts,
+        )
+        return bool(
+            reference_ts > 0
+            and current_ts - reference_ts >= _WS_HEARTBEAT_INTERVAL_SEC
+        )
+
+    async def _maintain_ws_transport(self, ws) -> None:
+        """Send a low-rate application heartbeat before the route goes idle."""
+        if not self._is_ws_heartbeat_due():
+            return
+        if await self._ws_protocol_heartbeat(ws):
+            return
+        self._ws_idle_reconnect_count += 1
+        self._ws_last_idle_reconnect_ts = time.time()
+        raise RuntimeError("deribit_ws_heartbeat_timeout")
+
     def _request_ws_soft_resubscribe(self, now: Optional[float] = None) -> None:
         """Ask the refresh task to rebuild core subscriptions in-place."""
         current_ts = time.time() if now is None else now
@@ -856,14 +879,12 @@ class DeribitAdapter(BaseExchangeAdapter):
                 f">{_WS_SOFT_RESUBSCRIBE_GRACE_SEC:.0f}s"
             )
 
-        heartbeat_age = now - self._ws_heartbeat_last_attempt_ts
-        if (
-            self._ws_heartbeat_last_attempt_ts > 0
-            and heartbeat_age < _WS_HEARTBEAT_RECHECK_SEC
-        ):
-            return
-
-        if not await self._ws_protocol_heartbeat(ws):
+        heartbeat_is_recent = bool(
+            self._ws_heartbeat_last_success_ts > 0
+            and now - self._ws_heartbeat_last_success_ts
+            <= _WS_HEARTBEAT_RECHECK_SEC
+        )
+        if not heartbeat_is_recent and not await self._ws_protocol_heartbeat(ws):
             self._ws_idle_reconnect_count += 1
             self._ws_last_idle_reconnect_ts = time.time()
             raise RuntimeError("deribit_ws_heartbeat_timeout")
@@ -884,6 +905,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                     timeout=_WS_RECEIVE_POLL_SEC,
                 )
             except asyncio.TimeoutError:
+                await self._maintain_ws_transport(ws)
                 if self._is_ws_ticker_stream_idle():
                     await self._qualify_ws_ticker_idle(ws)
                 continue
@@ -1844,6 +1866,7 @@ class DeribitAdapter(BaseExchangeAdapter):
             ),
             "deribit_ws_heartbeat_timeout_sec": _WS_HEARTBEAT_TIMEOUT_SEC,
             "deribit_ws_heartbeat_transport": "json_rpc_public_test",
+            "deribit_ws_heartbeat_interval_sec": _WS_HEARTBEAT_INTERVAL_SEC,
             "deribit_ws_heartbeat_recheck_sec": _WS_HEARTBEAT_RECHECK_SEC,
             "deribit_ws_heartbeat_attempt_count": (
                 self._ws_heartbeat_attempt_count

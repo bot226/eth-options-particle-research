@@ -1188,6 +1188,20 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.adapter._ws_ticker_message_count, 1)
         self.assertIn(instrument_name, self.adapter._ticker_cache_by_instrument)
 
+    async def test_json_rpc_heartbeat_runs_before_ticker_idle_timeout(self):
+        now = time.time()
+        self.adapter._ws_connection_started_ts = now - 21.0
+        self.adapter._ws_ticker_watch_started_ts = now - 21.0
+
+        await self.adapter._maintain_ws_transport(
+            _HeartbeatSilentWebSocket()
+        )
+
+        self.assertEqual(self.adapter._ws_heartbeat_attempt_count, 1)
+        self.assertEqual(self.adapter._ws_heartbeat_success_count, 1)
+        self.assertEqual(self.adapter._ws_idle_reconnect_count, 0)
+        self.assertFalse(self.adapter._ws_soft_resubscribe_requested)
+
     def test_recent_heartbeat_qualifies_quiet_transport_without_refreshing_data(self):
         instrument_name = "BTC-14AUG26-65000-C"
         channel = f"incremental_ticker.{instrument_name}"

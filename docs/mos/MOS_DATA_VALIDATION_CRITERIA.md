@@ -120,7 +120,7 @@ Use `/api/research/option-trade-flow-status` for the same read-only runtime
 summary. A network gap that cannot be covered by the recent-trade backfill must
 be marked invalid during later research; never interpolate missing trades.
 
-For v66 Deribit collection, allow three to five minutes for initial core
+For v67 Deribit collection, allow three to five minutes for initial core
 warmup, then the non-blocking smoke test must report:
 
 ```text
@@ -173,6 +173,7 @@ deribit_ws_liveness_state = ticker_active, stream_quiet_heartbeat_alive,
     or soft_resubscribe_waiting
 deribit_ws_heartbeat_timeout_sec = 10
 deribit_ws_heartbeat_transport = json_rpc_public_test
+deribit_ws_heartbeat_interval_sec = 20
 deribit_ws_heartbeat_recheck_sec = 30
 deribit_ws_soft_resubscribe_cooldown_sec = 300
 deribit_ws_soft_resubscribe_grace_sec = 90
