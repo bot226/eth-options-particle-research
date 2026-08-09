@@ -5,7 +5,7 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v60"
+CODE_VERSION = "research_fix_2026_08_09_v61"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
@@ -386,6 +386,15 @@ positive performance at 6/10/15 bps, a positive day-block 95% lower bound, Holm
 and shared-day max-T significance, and same-sign exchange confirmation. Even a
 statistically confirmed result remains prohibited from live entry changes until
 a separate reviewed version explicitly promotes it.
+
+Offline research model v1.0.0 is implemented in v61. It performs the causal
+same-contract Greek join, builds the frozen 5/15/30-minute direction and range
+features, aligns 15/30/60-minute Bybit linear outcomes, detects only the frozen
+30/15/2-bps false-sweep context, suppresses overlapping positions, charges
+6/10/15 bps, and evaluates every declared scope/filter/segment under its full
+multiple-testing family. Synthetic tests prove that later Greek snapshots and
+future-day observations cannot enter earlier features or thresholds. It has not
+yet seen a qualifying v68 dataset and therefore has produced no trading claim.
 
 The worker is enabled by the standard launcher. Set
 `MOS_OPTION_TRADE_FLOW_ENABLED=0` before launch to disable it without affecting

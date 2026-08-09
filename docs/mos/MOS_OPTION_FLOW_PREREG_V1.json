@@ -13,6 +13,7 @@
   "minimum_positive_day_ratio": 0.6,
   "signal_quantile": 0.8,
   "greek_max_age_sec": 600,
+  "minimum_greek_match_ratio": 0.8,
   "ohlcv_max_alignment_sec": 90,
   "bootstrap_samples": 5000,
   "permutation_samples": 5000,
@@ -32,6 +33,11 @@
   },
   "multiple_testing": {
     "family": "all_direction_rules",
+    "holm_alpha": 0.05,
+    "shared_day_sign_flip_max_t_alpha": 0.05
+  },
+  "range_multiple_testing": {
+    "family": "all_range_rules",
     "holm_alpha": 0.05,
     "shared_day_sign_flip_max_t_alpha": 0.05
   },

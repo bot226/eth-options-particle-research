@@ -123,3 +123,19 @@ history, contract Greeks, futures OHLCV, zero-drop sessions and at least 14
 healthy common days are present. Its output includes a canonical SHA-256 of the
 loaded protocol. A changed threshold therefore creates a different research
 identity and cannot silently replace the frozen test.
+
+After readiness passes, run the complete frozen family:
+
+```text
+python -m backend.scripts.option_flow_research <dataset-directory-or-zip> --run-analysis --output option_flow_result.json
+```
+
+For every trade the analyzer uses only the latest same-contract Greek snapshot
+whose timestamp is not later than the trade and whose age is at most ten
+minutes. It builds 5/15/30-minute CALL-versus-PUT and signed-delta imbalance for
+direction, plus absolute signed-gamma, signed-vega and trade-intensity features
+for future range. Tests are repeated for all trades versus non-block/non-combo,
+six maturity/moneyness segments, combined/Bybit/Deribit scopes, 15/30/60-minute
+outcomes, all observations versus the frozen false-sweep context, and direct
+versus inverse economic direction. Every inspected rule remains inside its
+declared Holm and shared-day max-T family.
