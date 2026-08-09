@@ -27,7 +27,7 @@ from scipy import stats
 
 
 REQUIRED_FILES = ("mos_research.db", "history.db", "option_trade_flow.db")
-OPTION_FLOW_RESEARCH_VERSION = "1.1.0"
+OPTION_FLOW_RESEARCH_VERSION = "1.1.1"
 DEFAULT_PROTOCOL_PATH = (
     Path(__file__).resolve().parents[2]
     / "docs"
@@ -460,11 +460,14 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
                 and int(row["dropped_trade_count"] or 0) == 0
             ):
                 healthy_bucket_samples[key[0]][int(timestamp // 300)] += 1
-        # At a five-second heartbeat cadence, 30 samples prove at least 50%
-        # observed health within the five-minute decision bucket.
+        minimum_status_samples = int(
+            protocol["minimum_status_samples_per_5m_per_exchange"]
+        )
         healthy_buckets = {
             exchange: {
-                bucket for bucket, samples in counts.items() if samples >= 30
+                bucket
+                for bucket, samples in counts.items()
+                if samples >= minimum_status_samples
             }
             for exchange, counts in healthy_bucket_samples.items()
         }
@@ -473,6 +476,14 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
             *(healthy_buckets.get(exchange, set()) for exchange in ("bybit", "deribit"))
         ) if healthy_buckets else set()
         healthy_days = len(common_healthy) * 300.0 / 86400.0
+        longest_lookback = max(int(value) for value in protocol["lookbacks_sec"])
+        longest_steps = max(1, math.ceil(longest_lookback / 300))
+        full_lookback_buckets = {
+            bucket
+            for bucket in common_healthy
+            if all(bucket - offset in common_healthy for offset in range(longest_steps))
+        }
+        full_lookback_days = len(full_lookback_buckets) * 300.0 / 86400.0
 
         research_tables = _table_names(research)
         research_column_requirements = {
@@ -570,7 +581,10 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
             blockers.append("both_exchanges_not_present")
         if overlap_days < minimum_days:
             blockers.append("insufficient_common_calendar_days")
-        if healthy_days < minimum_days:
+        required_full_lookback_days = max(
+            0.0, minimum_days - (longest_steps - 1) * 300.0 / 86400.0
+        )
+        if full_lookback_days < required_full_lookback_days:
             blockers.append("insufficient_healthy_dual_exchange_days")
         if not contract_range["contract_snapshots"]:
             blockers.append("contract_greeks_missing")
@@ -595,6 +609,8 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
             "max_status_sample_gap_sec": max_sample_gap or None,
             "common_overlap_days": overlap_days,
             "healthy_dual_exchange_days": healthy_days,
+            "healthy_full_lookback_days": full_lookback_days,
+            "required_healthy_full_lookback_days": required_full_lookback_days,
             "ohlcv": candle_range,
             "contract_snapshots": contract_range,
         }
@@ -908,6 +924,7 @@ def _false_sweep_direction(
     probe_window_sec: int,
     minimum_break_bps: float,
     requires_close_back_inside: bool,
+    minimum_path_coverage_ratio: float,
 ) -> int:
     decision_ts = candles[right_index].timestamp_utc
     reference = [
@@ -922,7 +939,12 @@ def _false_sweep_direction(
         for candle in candles[: right_index + 1]
         if decision_ts - probe_window_sec < candle.timestamp_utc <= decision_ts
     ]
-    if not reference or not probe:
+    expected_reference = max(1, math.ceil((reference_window_sec - probe_window_sec) / 60))
+    expected_probe = max(1, math.ceil(probe_window_sec / 60))
+    if (
+        len(reference) / expected_reference < minimum_path_coverage_ratio
+        or len(probe) / expected_probe < minimum_path_coverage_ratio
+    ):
         return 0
     reference_high = max(candle.high for candle in reference)
     reference_low = min(candle.low for candle in reference)
@@ -952,6 +974,7 @@ def build_futures_outcomes(
     false_sweep_probe_window_sec: int = 900,
     false_sweep_requires_close_back_inside: bool = True,
     trailing_lookbacks_sec: Iterable[int] = (300, 900, 1800),
+    minimum_path_coverage_ratio: float = 0.95,
 ) -> dict[tuple[float, int], FuturesOutcome]:
     """Align decisions and future labels; future candles are never used in features."""
     ordered = sorted(candles, key=lambda candle: candle.timestamp_utc)
@@ -970,6 +993,11 @@ def build_futures_outcomes(
                 trailing_index < len(ordered)
                 and abs(timestamps[trailing_index] - trailing_target) <= max_alignment_sec
                 and ordered[trailing_index].close > 0
+                and (
+                    right - trailing_index + 1
+                )
+                / max(1, math.ceil(lookback / 60) + 1)
+                >= minimum_path_coverage_ratio
             ):
                 trailing_returns[lookback] = (
                     start.close / ordered[trailing_index].close - 1.0
@@ -981,6 +1009,7 @@ def build_futures_outcomes(
             probe_window_sec=false_sweep_probe_window_sec,
             minimum_break_bps=false_sweep_break_bps,
             requires_close_back_inside=false_sweep_requires_close_back_inside,
+            minimum_path_coverage_ratio=minimum_path_coverage_ratio,
         )
         for horizon in sorted(set(int(value) for value in horizons_sec)):
             target = decision + horizon
@@ -989,7 +1018,11 @@ def build_futures_outcomes(
                 continue
             end = ordered[end_index]
             path = ordered[right + 1 : end_index + 1]
-            if not path:
+            expected_path_candles = max(1, math.ceil(horizon / 60))
+            if (
+                not path
+                or len(path) / expected_path_candles < minimum_path_coverage_ratio
+            ):
                 continue
             future_return = (end.close / start.close - 1.0) * 100.0
             future_high = max(candle.high for candle in path)
@@ -1073,7 +1106,7 @@ def healthy_decision_timestamps(
     paths: Mapping[str, Path],
     *,
     interval_sec: int = 300,
-    minimum_samples_per_exchange: int = 30,
+    minimum_samples_per_exchange: int = 48,
 ) -> set[float]:
     """Return decision ends backed by clean within-bucket health on both feeds."""
     connection = _read_only(paths["option_trade_flow.db"])
@@ -1147,6 +1180,21 @@ def _feature_value(point: FlowFeaturePoint, feature: str) -> float | None:
         return None
     result = float(value)
     return result if math.isfinite(result) else None
+
+
+def _healthy_lookback_window(
+    timestamp_utc: float,
+    lookback_sec: int,
+    healthy_timestamps: set[float],
+    *,
+    interval_sec: int,
+) -> bool:
+    if lookback_sec < interval_sec or lookback_sec % interval_sec:
+        return False
+    return all(
+        timestamp_utc - offset in healthy_timestamps
+        for offset in range(0, lookback_sec, interval_sec)
+    )
 
 
 def _summarize_direction_rule(
@@ -1253,8 +1301,14 @@ def evaluate_direction_rules(
     grouped: dict[tuple[str, str, str, int, str], list[tuple[float, float]]] = defaultdict(list)
     direction_features = set(protocol["direction_features"])
     minimum_greek_match = float(protocol.get("minimum_greek_match_ratio", 0.0))
+    interval_sec = int(protocol["decision_interval_sec"])
     for point in feature_points:
-        if point.timestamp_utc not in healthy_timestamps:
+        if not _healthy_lookback_window(
+            point.timestamp_utc,
+            point.lookback_sec,
+            healthy_timestamps,
+            interval_sec=interval_sec,
+        ):
             continue
         for feature in direction_features:
             value = _feature_value(point, feature)
@@ -1392,8 +1446,14 @@ def evaluate_range_rules(
     grouped: dict[tuple[str, str, str, int, str], list[tuple[float, float]]] = defaultdict(list)
     range_features = set(protocol["range_features"])
     minimum_greek_match = float(protocol.get("minimum_greek_match_ratio", 0.0))
+    interval_sec = int(protocol["decision_interval_sec"])
     for point in feature_points:
-        if point.timestamp_utc not in healthy_timestamps:
+        if not _healthy_lookback_window(
+            point.timestamp_utc,
+            point.lookback_sec,
+            healthy_timestamps,
+            interval_sec=interval_sec,
+        ):
             continue
         for feature in range_features:
             value = _feature_value(point, feature)
@@ -1754,7 +1814,11 @@ def run_frozen_analysis(
             interval_sec=int(protocol["decision_interval_sec"]),
         )
         healthy = healthy_decision_timestamps(
-            paths, interval_sec=int(protocol["decision_interval_sec"])
+            paths,
+            interval_sec=int(protocol["decision_interval_sec"]),
+            minimum_samples_per_exchange=int(
+                protocol["minimum_status_samples_per_5m_per_exchange"]
+            ),
         )
         decision_times = {
             point.timestamp_utc for point in feature_points if point.timestamp_utc in healthy
@@ -1775,6 +1839,9 @@ def run_frozen_analysis(
                 protocol["false_sweep"]["requires_close_back_inside"]
             ),
             trailing_lookbacks_sec=protocol["lookbacks_sec"],
+            minimum_path_coverage_ratio=float(
+                protocol["minimum_ohlcv_path_coverage_ratio"]
+            ),
         )
         decision_contexts = load_decision_contexts(
             paths,

@@ -29,6 +29,7 @@ from backend.scripts.option_flow_research import (
     shared_day_max_t_p_values,
     _feature_value,
     _context_matches,
+    _healthy_lookback_window,
 )
 from backend.workers.option_trade_flow_worker import (
     OptionTradeFlowStore,
@@ -274,6 +275,20 @@ class FeatureConstructionTest(unittest.TestCase):
         )
         self.assertEqual(_feature_value(disagree, "delta_contract_consensus"), 0.0)
 
+    def test_long_lookback_requires_every_health_bucket(self):
+        timestamp = 1800.0
+        complete = {1200.0, 1500.0, 1800.0}
+        self.assertTrue(
+            _healthy_lookback_window(
+                timestamp, 900, complete, interval_sec=300
+            )
+        )
+        self.assertFalse(
+            _healthy_lookback_window(
+                timestamp, 900, {1500.0, 1800.0}, interval_sec=300
+            )
+        )
+
 
 class EarlierGreekJoinTest(unittest.TestCase):
     def setUp(self):
@@ -359,6 +374,21 @@ class FuturesOutcomeAlignmentTest(unittest.TestCase):
         self.assertEqual(outcome.end_close, 145.0)
         self.assertAlmostEqual(outcome.future_return_pct, (145 / 130 - 1) * 100)
         self.assertAlmostEqual(outcome.trailing_returns_pct[300], (130 / 125 - 1) * 100)
+
+    def test_incomplete_future_candle_path_is_not_labeled(self):
+        candles = [
+            FuturesCandle(float(minute * 60), 101.0, 99.0, 100.0)
+            for minute in range(61)
+            if minute != 40
+        ]
+        outcomes = build_futures_outcomes(
+            candles,
+            [1800.0],
+            horizons_sec=[900],
+            max_alignment_sec=1,
+            minimum_path_coverage_ratio=0.95,
+        )
+        self.assertNotIn((1800.0, 900), outcomes)
 
 
 class EarlierMosContextJoinTest(unittest.TestCase):
@@ -706,6 +736,7 @@ class EndToEndDatasetTest(unittest.TestCase):
                     "horizons_sec": [300],
                     "training_days": 1,
                     "minimum_total_days": 0,
+                    "minimum_status_samples_per_5m_per_exchange": 30,
                     "minimum_test_days": 1,
                     "minimum_trades": 1,
                     "signal_quantile": 0.5,

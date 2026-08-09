@@ -152,3 +152,10 @@ price-only controls using the sign of the trailing return over the same lookback
 continuation and reversal. Option flow must beat both controls with a positive
 day-block 95% lower confidence bound in addition to producing positive net PnL,
 passing Holm/max-T and agreeing across Bybit and Deribit.
+
+A feature is eligible only when every five-minute health bucket across its full
+lookback contains at least 48 subscribed five-second samples on both exchanges
+(80% observed coverage). A recovered final bucket cannot validate a
+15/30-minute window that crossed an outage. Price-control and future outcome
+paths also require at least 95% of their expected one-minute candles; incomplete
+paths receive no label rather than a biased smaller range.

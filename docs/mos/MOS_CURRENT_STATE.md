@@ -5,7 +5,7 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v62"
+CODE_VERSION = "research_fix_2026_08_09_v63"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
@@ -387,7 +387,7 @@ and shared-day max-T significance, and same-sign exchange confirmation. Even a
 statistically confirmed result remains prohibited from live entry changes until
 a separate reviewed version explicitly promotes it.
 
-Offline research model v1.1.0 is implemented in v62. It performs the causal
+Offline research model v1.1.1 is implemented in v63. It performs the causal
 same-contract Greek join, builds the frozen 5/15/30-minute direction and range
 features, aligns 15/30/60-minute Bybit linear outcomes, detects only the frozen
 30/15/2-bps false-sweep context, suppresses overlapping positions, charges
@@ -404,6 +404,12 @@ the same multiple-testing families. A directional rule must beat both trailing
 price continuation and price reversal on the exact same timestamps with a
 positive day-block 95% lower confidence bound; positive standalone PnL is no
 longer sufficient.
+
+v1.1.1 rejects a 15/30-minute flow feature unless every five-minute bucket in
+its full lookback has clean status history for both exchanges. Trailing
+price-control paths and future return/range paths require at least 95% of the
+expected one-minute candles. Thus recovery after an outage cannot silently make
+an incomplete pre-outage flow window or an underestimated future range eligible.
 
 The worker is enabled by the standard launcher. Set
 `MOS_OPTION_TRADE_FLOW_ENABLED=0` before launch to disable it without affecting

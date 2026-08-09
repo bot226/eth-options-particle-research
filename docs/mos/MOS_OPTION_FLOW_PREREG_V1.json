@@ -15,6 +15,8 @@
   "greek_max_age_sec": 600,
   "minimum_greek_match_ratio": 0.8,
   "ohlcv_max_alignment_sec": 90,
+  "minimum_ohlcv_path_coverage_ratio": 0.95,
+  "minimum_status_samples_per_5m_per_exchange": 48,
   "mos_context_max_age_sec": 120,
   "bootstrap_samples": 5000,
   "permutation_samples": 5000,
