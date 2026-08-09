@@ -5,7 +5,7 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v65"
+CODE_VERSION = "research_fix_2026_08_09_v66"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
@@ -26,6 +26,13 @@ legacy `op=subscribe` response and the current `COMMAND_RESP` response whose
 `successTopics` contains `publicTrade.BTC`. A successful acknowledgement can no
 longer be misclassified as a rejection and trigger a reconnect loop. Deribit
 network timeouts remain visible and are not treated as healthy data.
+
+v66 keeps the direct Deribit option-ticker WebSocket as the source of live
+contract data but qualifies quiet connections with JSON-RPC `public/test` on
+that same socket. This avoids false reconnects on collector network paths that
+pass WebSocket data frames while dropping protocol Ping/Pong control frames.
+REST remains only the existing bounded cache-recovery path; no source, formula,
+threshold, database schema, candidate, or execution behavior changed.
 
 ## Particle Logic shadow v1
 
@@ -349,6 +356,27 @@ v66 therefore:
   for 15/30-minute validation;
 - leaves ticker freshness, core selection, REST circuit breaker, MOS formulas,
   databases, manual entries, and Particle Logic scoring unchanged.
+
+## Deribit JSON-RPC heartbeat compatibility v17
+
+Collector-host validation after the DNS route was repaired proved that direct
+WebSocket JSON data and subscriptions worked, while protocol Ping/Pong control
+frames still timed out. The old watchdog therefore disconnected a usable quiet
+ticker stream every 60 seconds and forced the bounded REST recovery path to keep
+the core fresh.
+
+Research fix v66 therefore:
+
+- sends public JSON-RPC `public/test` through the already-open Deribit
+  WebSocket when the incremental ticker stream is quiet;
+- receives the matching response in the single existing receive loop and still
+  processes any ticker notifications or subscription acknowledgements that
+  arrive first;
+- reconnects on a real JSON-RPC timeout or error exactly as before;
+- exposes `deribit_ws_heartbeat_transport = json_rpc_public_test`;
+- does not use REST for the heartbeat and does not replace Deribit ticker data;
+- leaves source data, cache freshness, core coverage, formulas, thresholds,
+  schemas, candidates, manual entries, and execution behavior unchanged.
 
 ## Public option trade-flow observer v68
 

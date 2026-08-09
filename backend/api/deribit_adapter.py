@@ -772,16 +772,40 @@ class DeribitAdapter(BaseExchangeAdapter):
         return current_ts - reference_ts >= _WS_TICKER_IDLE_TIMEOUT_SEC
 
     async def _ws_protocol_heartbeat(self, ws) -> bool:
-        """Qualify socket liveness without adding Deribit API requests."""
+        """Qualify socket liveness with Deribit JSON-RPC on the same socket.
+
+        Some otherwise healthy network paths pass WebSocket data frames but
+        silently drop protocol-level Ping/Pong control frames.  `public/test`
+        proves the application path used by Deribit subscriptions without
+        falling back to REST or opening a second connection.
+        """
         self._ws_heartbeat_attempt_count += 1
         self._ws_heartbeat_last_attempt_ts = time.time()
         started = time.perf_counter()
         try:
-            pong_waiter = await ws.ping()
-            await asyncio.wait_for(
-                pong_waiter,
-                timeout=_WS_HEARTBEAT_TIMEOUT_SEC,
+            request_id = self._next_id()
+            await ws.send(json.dumps({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "public/test",
+                "params": {},
+            }))
+            deadline = asyncio.get_running_loop().time() + (
+                _WS_HEARTBEAT_TIMEOUT_SEC
             )
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                message = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                msg = json.loads(message)
+                if msg.get("id") == request_id:
+                    if msg.get("error") or "result" not in msg:
+                        raise RuntimeError(
+                            f"heartbeat_rpc_error:{msg.get('error') or msg}"
+                        )
+                    break
+                await self._handle_ws_message(msg)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1819,6 +1843,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                 else "stream_quiet_unqualified"
             ),
             "deribit_ws_heartbeat_timeout_sec": _WS_HEARTBEAT_TIMEOUT_SEC,
+            "deribit_ws_heartbeat_transport": "json_rpc_public_test",
             "deribit_ws_heartbeat_recheck_sec": _WS_HEARTBEAT_RECHECK_SEC,
             "deribit_ws_heartbeat_attempt_count": (
                 self._ws_heartbeat_attempt_count

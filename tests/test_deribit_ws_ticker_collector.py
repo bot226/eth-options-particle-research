@@ -34,15 +34,29 @@ class _FakeWebSocket:
 
 
 class _SilentWebSocket:
+    async def send(self, _message):
+        return None
+
     async def recv(self):
         await asyncio.sleep(1.0)
 
 
 class _HeartbeatSilentWebSocket(_SilentWebSocket):
-    async def ping(self):
-        pong = asyncio.get_running_loop().create_future()
-        pong.set_result(None)
-        return pong
+    def __init__(self, messages=None):
+        self.request = None
+        self.messages = list(messages or [])
+
+    async def send(self, message):
+        self.request = json.loads(message)
+
+    async def recv(self):
+        if self.messages:
+            return json.dumps(self.messages.pop(0))
+        return json.dumps({
+            "jsonrpc": "2.0",
+            "id": self.request["id"],
+            "result": {"version": "1.2.26"},
+        })
 
 
 class _InstrumentDiscoveryWebSocket:
@@ -1115,6 +1129,9 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         ), patch(
             "api.deribit_adapter._WS_TICKER_IDLE_TIMEOUT_SEC",
             0.01,
+        ), patch(
+            "api.deribit_adapter._WS_HEARTBEAT_TIMEOUT_SEC",
+            0.01,
         ):
             with self.assertRaisesRegex(
                 RuntimeError,
@@ -1145,6 +1162,31 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.adapter._ws_soft_resubscribe_in_progress)
         self.assertEqual(self.adapter._ws_soft_resubscribe_attempt_count, 1)
         self.assertTrue(self.adapter._ws_subscription_retry_event.is_set())
+
+    async def test_json_rpc_heartbeat_preserves_ticker_messages_while_waiting(self):
+        instrument_name = "BTC-14AUG26-65000-C"
+        websocket = _HeartbeatSilentWebSocket(messages=[{
+            "method": "subscription",
+            "params": {
+                "channel": f"incremental_ticker.{instrument_name}",
+                "data": {
+                    "instrument_name": instrument_name,
+                    "mark_iv": 55.2,
+                    "greeks": {
+                        "delta": 0.42,
+                        "gamma": 0.000031,
+                        "vega": 18.5,
+                        "theta": -7.2,
+                    },
+                },
+            },
+        }])
+
+        self.assertTrue(await self.adapter._ws_protocol_heartbeat(websocket))
+        self.assertEqual(websocket.request["method"], "public/test")
+        self.assertEqual(self.adapter._ws_heartbeat_success_count, 1)
+        self.assertEqual(self.adapter._ws_ticker_message_count, 1)
+        self.assertIn(instrument_name, self.adapter._ticker_cache_by_instrument)
 
     def test_recent_heartbeat_qualifies_quiet_transport_without_refreshing_data(self):
         instrument_name = "BTC-14AUG26-65000-C"

@@ -172,6 +172,7 @@ deribit_ws_ticker_idle_timeout_sec = 60
 deribit_ws_liveness_state = ticker_active, stream_quiet_heartbeat_alive,
     or soft_resubscribe_waiting
 deribit_ws_heartbeat_timeout_sec = 10
+deribit_ws_heartbeat_transport = json_rpc_public_test
 deribit_ws_heartbeat_recheck_sec = 30
 deribit_ws_soft_resubscribe_cooldown_sec = 300
 deribit_ws_soft_resubscribe_grace_sec = 90
