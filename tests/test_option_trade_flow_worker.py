@@ -6,12 +6,43 @@ from pathlib import Path
 
 from backend.workers.option_trade_flow_worker import (
     OptionTradeFlowStore,
+    bybit_subscription_confirmed,
     normalize_bybit_trade,
     normalize_deribit_trade,
 )
 
 
 class OptionTradeNormalizationTest(unittest.TestCase):
+    def test_accepts_bybit_command_response_subscription_ack(self):
+        self.assertTrue(
+            bybit_subscription_confirmed(
+                {
+                    "success": True,
+                    "data": {
+                        "failTopics": [],
+                        "successTopics": ["publicTrade.BTC"],
+                    },
+                    "type": "COMMAND_RESP",
+                }
+            )
+        )
+
+    def test_rejects_bybit_ack_without_requested_topic(self):
+        self.assertFalse(
+            bybit_subscription_confirmed(
+                {
+                    "success": True,
+                    "data": {"failTopics": [], "successTopics": ["other.topic"]},
+                    "type": "COMMAND_RESP",
+                }
+            )
+        )
+
+    def test_accepts_legacy_bybit_subscription_ack(self):
+        self.assertTrue(
+            bybit_subscription_confirmed({"op": "subscribe", "success": True})
+        )
+
     def test_normalizes_bybit_public_option_trade(self):
         trade = normalize_bybit_trade(
             {

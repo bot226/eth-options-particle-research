@@ -32,7 +32,7 @@ Do **not** turn MOS into a buy/sell signal dashboard.
 ## Current stable Research Layer version
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v64"
+CODE_VERSION = "research_fix_2026_08_09_v65"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 ```

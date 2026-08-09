@@ -5,7 +5,7 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v64"
+CODE_VERSION = "research_fix_2026_08_09_v65"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
@@ -20,6 +20,12 @@ Research tool v1.1.2 adds a read-only, one-click Windows readiness check. It
 reports clean dual-exchange progress and turns missing or incomplete input into
 a clear collector-facing result. The frozen protocol, signal thresholds and live
 entry behavior are unchanged.
+
+v65 accepts both Bybit option-trade subscription acknowledgement formats: the
+legacy `op=subscribe` response and the current `COMMAND_RESP` response whose
+`successTopics` contains `publicTrade.BTC`. A successful acknowledgement can no
+longer be misclassified as a rejection and trigger a reconnect loop. Deribit
+network timeouts remain visible and are not treated as healthy data.
 
 ## Particle Logic shadow v1
 

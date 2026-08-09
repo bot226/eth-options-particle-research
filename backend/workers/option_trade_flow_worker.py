@@ -41,6 +41,7 @@ QUEUE_MAXSIZE = 50_000
 WRITE_BATCH_SIZE = 1_000
 STATUS_FLUSH_SECONDS = 5.0
 BACKFILL_MIN_INTERVAL_SECONDS = 300.0
+BYBIT_OPTION_TRADE_TOPIC = "publicTrade.BTC"
 
 
 def _float(value: Any) -> float | None:
@@ -64,6 +65,24 @@ def _iv_decimal(exchange: str, value: Any) -> float | None:
         return None
     normalized = InstrumentNormalizer.normalize_iv(exchange, parsed)
     return normalized if normalized > 0 else None
+
+
+def bybit_subscription_confirmed(
+    acknowledgement: dict[str, Any], topic: str = BYBIT_OPTION_TRADE_TOPIC
+) -> bool:
+    """Accept both documented Bybit subscription acknowledgement shapes."""
+    if not acknowledgement.get("success", False):
+        return False
+    if acknowledgement.get("op") == "subscribe":
+        return True
+    if acknowledgement.get("type") != "COMMAND_RESP":
+        return False
+    data = acknowledgement.get("data")
+    if not isinstance(data, dict):
+        return False
+    successful = data.get("successTopics") or []
+    failed = data.get("failTopics") or []
+    return topic in successful and topic not in failed
 
 
 def _identity(exchange: str, symbol: str) -> tuple[str | None, str | None, float | None, str | None]:
@@ -479,13 +498,13 @@ class OptionTradeFlowCollector:
                     status["connection_count"] += 1
                     status["connection_state"] = "subscribing"
                     status["last_error"] = ""
-                    await websocket.send(json.dumps({"op": "subscribe", "args": ["publicTrade.BTC"]}))
+                    await websocket.send(
+                        json.dumps({"op": "subscribe", "args": [BYBIT_OPTION_TRADE_TOPIC]})
+                    )
                     acknowledgement = json.loads(
                         await asyncio.wait_for(websocket.recv(), timeout=10.0)
                     )
-                    if acknowledgement.get("op") != "subscribe" or not acknowledgement.get(
-                        "success", False
-                    ):
+                    if not bybit_subscription_confirmed(acknowledgement):
                         raise RuntimeError(f"subscription_rejected:{acknowledgement}")
                     status["connection_state"] = "subscribed"
                     await self._backfill(exchange)
@@ -495,7 +514,7 @@ class OptionTradeFlowCollector:
                             payload = json.loads(message)
                             if payload.get("op") == "pong":
                                 continue
-                            if payload.get("topic") != "publicTrade.BTC":
+                            if payload.get("topic") != BYBIT_OPTION_TRADE_TOPIC:
                                 continue
                             status["message_count"] += 1
                             status["last_message_utc"] = time.time()
