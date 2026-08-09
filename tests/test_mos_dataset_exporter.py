@@ -28,7 +28,7 @@ class MosDatasetExporterTest(unittest.TestCase):
             "CODE_VERSION = 'test'\n"
             "RESEARCH_SCHEMA_VERSION = '2.0'\n"
             "ENGINE_PATCH_VERSION = 'test'\n"
-            "DATASET_EXPORTER_VERSION = '1.2.0'\n"
+            "DATASET_EXPORTER_VERSION = '1.2.1'\n"
             "PARTICLE_LOGIC_VERSION = 'particle_shadow_v3'\n",
             encoding="utf-8",
         )
@@ -63,8 +63,12 @@ class MosDatasetExporterTest(unittest.TestCase):
         connection.execute(
             "CREATE TABLE collector_status (updated_at_utc REAL NOT NULL)"
         )
+        connection.execute(
+            "CREATE TABLE collector_status_history (updated_at_utc REAL NOT NULL)"
+        )
         connection.execute("INSERT INTO option_trades VALUES (1786300000.0)")
         connection.execute("INSERT INTO collector_status VALUES (1786300001.0)")
+        connection.execute("INSERT INTO collector_status_history VALUES (1786300001.0)")
         connection.commit()
         return database_name
 
@@ -137,6 +141,12 @@ class MosDatasetExporterTest(unittest.TestCase):
         self.assertEqual(manifest["databases"][database_name]["checks"]["integrity_check"], "ok")
         self.assertEqual(
             manifest["databases"][database_name]["time_ranges"]["option_trades"]["rows"],
+            1,
+        )
+        self.assertEqual(
+            manifest["databases"][database_name]["time_ranges"][
+                "collector_status_history"
+            ]["rows"],
             1,
         )
         with zipfile.ZipFile(archive_path) as archive:

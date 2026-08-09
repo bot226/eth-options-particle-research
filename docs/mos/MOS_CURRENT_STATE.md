@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v59"
+CODE_VERSION = "research_fix_2026_08_09_v60"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v67_option_trade_flow_observer"
+ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -339,7 +339,7 @@ v66 therefore:
 - leaves ticker freshness, core selection, REST circuit breaker, MOS formulas,
   databases, manual entries, and Particle Logic scoring unchanged.
 
-## Public option trade-flow observer v17
+## Public option trade-flow observer v68
 
 Research on the first six-day contract-level archive found no durable futures
 direction edge in OI, 24-hour volume, IV or Greek snapshots. Several apparent
@@ -348,7 +348,7 @@ to the cache. Clean matched-contract Bybit changes retained a possible
 movement-magnitude effect after false breakouts, but reversal and continuation
 both remained negative after costs.
 
-v67 therefore adds only missing raw evidence; it does not add a signal:
+v67 added only missing raw evidence; it did not add a signal:
 
 - runs a standalone observer process for public BTC option trades;
 - subscribes to Bybit `publicTrade.BTC` and Deribit
@@ -361,9 +361,31 @@ v67 therefore adds only missing raw evidence; it does not add a signal:
 - writes only `option_trade_flow.db`; existing MOS databases and schemas are
   unchanged;
 - exposes `/api/research/option-trade-flow-status` as a read-only diagnostic;
-- makes Dataset Exporter v1.2 include the new database when it exists;
+- makes Dataset Exporter v1.2.1 include the new database when it exists;
 - remains an observation-only Research Layer and cannot change State Machine,
   events, candidates, execution or manual trading.
+
+v68 makes that evidence auditable across restarts without changing the stream or
+any MOS decision:
+
+- assigns an immutable session ID and process start time to each worker run;
+- appends both exchanges' state every five seconds to
+  `collector_status_history` instead of retaining only the latest row;
+- preserves cumulative drop and reconnect counters per session;
+- exposes 30-minute sample gaps, unhealthy samples, sessions and historical
+  queue drops in the read-only status endpoint;
+- upgrades the standalone database schema in place from 1.0 to 1.1; no clean
+  database is required;
+- Dataset Exporter 1.2.1 includes the new history time range and row count.
+
+The first trade-flow hypothesis family is frozen before collection in
+`MOS_OPTION_FLOW_PREREG_V1.json`. The offline readiness tool rejects archives
+without 14 healthy dual-exchange days, clean queue history, contract Greeks or
+futures OHLCV. Statistical promotion requires prior-day-only thresholds,
+positive performance at 6/10/15 bps, a positive day-block 95% lower bound, Holm
+and shared-day max-T significance, and same-sign exchange confirmation. Even a
+statistically confirmed result remains prohibited from live entry changes until
+a separate reviewed version explicitly promotes it.
 
 The worker is enabled by the standard launcher. Set
 `MOS_OPTION_TRADE_FLOW_ENABLED=0` before launch to disable it without affecting

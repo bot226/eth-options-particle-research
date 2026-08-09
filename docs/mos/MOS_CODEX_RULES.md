@@ -78,9 +78,9 @@ Update only:
 Current development branch:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v59"
+CODE_VERSION = "research_fix_2026_08_09_v60"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v67_option_trade_flow_observer"
+ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 ```
 
 Do not create duplicate version files.

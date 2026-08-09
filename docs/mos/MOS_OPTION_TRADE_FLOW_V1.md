@@ -45,6 +45,11 @@ Primary key `(exchange, trade_id)` makes reconnect backfills idempotent.
 `collector_status` records connection/reconnect/message/trade counts, queue drops,
 last timestamps and errors. A dropped trade invalidates that collection window.
 
+Schema 1.1 also appends the same evidence every five seconds to
+`collector_status_history`, keyed by a unique process session. This makes
+disconnects, restarts, stale intervals and queue drops auditable after the fact;
+the latest-state table alone is not accepted as proof of a clean research window.
+
 ## Runtime verification
 
 Start the normal dashboard and open:
@@ -88,7 +93,7 @@ SELECT * FROM collector_status ORDER BY exchange;
 
 ## Dataset export
 
-Dataset Exporter v1.2 keeps the original three databases required. If
+Dataset Exporter v1.2.1 keeps the original three databases required. If
 `option_trade_flow.db` exists, it creates a consistent SQLite online backup,
 checks integrity, adds time ranges and SHA-256 metadata, and includes it in the
 same ZIP. No collector shutdown is required.
@@ -100,3 +105,21 @@ bearish. CALL/PUT type, delta sign, maturity, moneyness, block/combo structure a
 the nearest fresh contract Greeks must be considered. All transformations remain
 offline until multi-week walk-forward validation beats price-only controls after
 0.06%, 0.10% and 0.15% futures costs.
+
+The preregistered protocol is frozen in
+`docs/mos/MOS_OPTION_FLOW_PREREG_V1.json`. It fixes the feature families,
+lookbacks, horizons, costs, training period, quantile, false-sweep definition,
+minimum sample sizes, daily block bootstrap, Holm correction, shared-day max-T
+test and exchange-confirmation gate before any v68 archive is inspected.
+
+Readiness can be audited without changing a database:
+
+```text
+python -m backend.scripts.option_flow_research <dataset-directory-or-zip>
+```
+
+The command returns `ready` only when both trade feeds, schema 1.1 quality
+history, contract Greeks, futures OHLCV, zero-drop sessions and at least 14
+healthy common days are present. Its output includes a canonical SHA-256 of the
+loaded protocol. A changed threshold therefore creates a different research
+identity and cannot silently replace the frozen test.

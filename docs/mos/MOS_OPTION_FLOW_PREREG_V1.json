@@ -1,0 +1,53 @@
+{
+  "protocol": "mos_option_flow_preregister_v1",
+  "frozen_at_utc": "2026-08-09T00:00:00Z",
+  "purpose": "Out-of-sample test of public BTC option trade flow for BTCUSDT futures direction and movement magnitude",
+  "decision_interval_sec": 300,
+  "lookbacks_sec": [300, 900, 1800],
+  "horizons_sec": [900, 1800, 3600],
+  "futures_round_trip_cost_bps": [6, 10, 15],
+  "training_days": 7,
+  "minimum_total_days": 14,
+  "minimum_test_days": 7,
+  "minimum_trades": 50,
+  "minimum_positive_day_ratio": 0.6,
+  "signal_quantile": 0.8,
+  "greek_max_age_sec": 600,
+  "ohlcv_max_alignment_sec": 90,
+  "bootstrap_samples": 5000,
+  "permutation_samples": 5000,
+  "random_seed": 226,
+  "filters": ["all", "non_block_non_combo"],
+  "segments": ["all", "expiry_0_7d", "expiry_8_30d", "expiry_31d_plus", "atm_5pct", "wing_over_5pct"],
+  "scopes": ["combined", "bybit", "deribit"],
+  "contexts": ["all", "false_sweep_30m_15m_2bps"],
+  "direction_features": ["call_put_contract_imbalance", "signed_delta_imbalance"],
+  "direction_modes": ["direct", "inverse"],
+  "range_features": ["absolute_signed_gamma_imbalance", "absolute_signed_vega_imbalance", "trade_intensity"],
+  "false_sweep": {
+    "reference_window_sec": 1800,
+    "probe_window_sec": 900,
+    "minimum_break_bps": 2,
+    "requires_close_back_inside": true
+  },
+  "multiple_testing": {
+    "family": "all_direction_rules",
+    "holm_alpha": 0.05,
+    "shared_day_sign_flip_max_t_alpha": 0.05
+  },
+  "promotion_gate": {
+    "positive_mean_at_every_cost": true,
+    "day_block_95pct_ci_lower_positive_at_15bps": true,
+    "holm_adjusted_p_below": 0.05,
+    "max_t_adjusted_p_below": 0.05,
+    "requires_same_sign_bybit_and_deribit_gross_estimates": true,
+    "live_entry_changes_allowed": false
+  },
+  "anti_leakage": [
+    "Greeks are joined only from a snapshot at or before the trade timestamp",
+    "Signal thresholds use prior UTC days only",
+    "Overlapping positions for the same rule are suppressed until its horizon ends",
+    "All costs, hypotheses and promotion gates are frozen before the first v68 dataset is inspected",
+    "Failed and incomplete collector sessions are excluded before statistical testing"
+  ]
+}

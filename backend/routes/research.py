@@ -2026,6 +2026,8 @@ def option_trade_flow_status():
     uri = f"file:{OPTION_FLOW_DB_PATH}?mode=ro"
     connection = sqlite3.connect(uri, uri=True, timeout=10.0)
     connection.row_factory = sqlite3.Row
+    quality_window_sec = 30 * 60
+    now = time.time()
     try:
         integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
         trade_rows = connection.execute(
@@ -2048,9 +2050,40 @@ def option_trade_flow_status():
         collector_rows = connection.execute(
             "SELECT * FROM collector_status ORDER BY exchange"
         ).fetchall()
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "collector_status_history" in tables:
+            recent_history_rows = connection.execute(
+                """
+                SELECT exchange, session_id, connection_state,
+                       dropped_trade_count, updated_at_utc
+                FROM collector_status_history
+                WHERE updated_at_utc >= ?
+                ORDER BY exchange, updated_at_utc
+                """,
+                (now - quality_window_sec,),
+            ).fetchall()
+            dropped_history_rows = connection.execute(
+                """
+                SELECT exchange, SUM(session_drops) AS dropped_trades
+                FROM (
+                    SELECT exchange, session_id,
+                           MAX(dropped_trade_count) AS session_drops
+                    FROM collector_status_history
+                    GROUP BY exchange, session_id
+                )
+                GROUP BY exchange
+                """
+            ).fetchall()
+        else:
+            recent_history_rows = []
+            dropped_history_rows = []
     finally:
         connection.close()
-    now = time.time()
     collectors = [dict(row) for row in collector_rows]
     expected_collectors = {"bybit", "deribit"}
     observed_collectors = {str(row["exchange"]) for row in collectors}
@@ -2061,6 +2094,37 @@ def option_trade_flow_status():
         row["connection_state"] == "subscribed" for row in collectors
     )
     dropped = sum(int(row["dropped_trade_count"]) for row in collectors)
+    recent_by_exchange: dict[str, list[dict]] = {}
+    for row in recent_history_rows:
+        recent_by_exchange.setdefault(str(row["exchange"]), []).append(dict(row))
+    quality_exchanges = []
+    for exchange in sorted(expected_collectors):
+        samples = recent_by_exchange.get(exchange, [])
+        timestamps = [float(row["updated_at_utc"]) for row in samples]
+        gaps = [right - left for left, right in zip(timestamps, timestamps[1:])]
+        quality_exchanges.append(
+            {
+                "exchange": exchange,
+                "samples": len(samples),
+                "sessions": len({row["session_id"] for row in samples}),
+                "subscribed_samples": sum(
+                    row["connection_state"] == "subscribed" for row in samples
+                ),
+                "unhealthy_samples": sum(
+                    row["connection_state"] != "subscribed" for row in samples
+                ),
+                "max_sample_gap_sec": round(max(gaps), 3) if gaps else None,
+                "latest_sample_age_sec": (
+                    round(now - timestamps[-1], 3) if timestamps else None
+                ),
+            }
+        )
+    historical_dropped = {
+        str(row["exchange"]): int(row["dropped_trades"] or 0)
+        for row in dropped_history_rows
+    }
+    history_available = set(recent_by_exchange) == expected_collectors
+    all_session_drops = sum(historical_dropped.values())
     exchanges = []
     for row in trade_rows:
         item = dict(row)
@@ -2070,7 +2134,16 @@ def option_trade_flow_status():
             else None
         )
         exchanges.append(item)
-    status = "ok" if integrity == "ok" and collector_current and subscribed and dropped == 0 else "degraded"
+    status = (
+        "ok"
+        if integrity == "ok"
+        and collector_current
+        and subscribed
+        and dropped == 0
+        and history_available
+        and all_session_drops == 0
+        else "degraded"
+    )
     return {
         "status": status,
         "engine_patch_version": ENGINE_PATCH_VERSION,
@@ -2080,6 +2153,10 @@ def option_trade_flow_status():
         "collector_status_fresh": collector_current,
         "all_collectors_subscribed": subscribed,
         "dropped_trades": dropped,
+        "historical_dropped_trades": all_session_drops,
+        "quality_history_available": history_available,
+        "quality_window_sec": quality_window_sec,
+        "quality_window": quality_exchanges,
         "trades": sum(int(row["trades"]) for row in exchanges),
         "exchanges": exchanges,
         "collector_status": collectors,

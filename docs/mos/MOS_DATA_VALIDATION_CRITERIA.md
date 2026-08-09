@@ -58,7 +58,7 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
-v67 adds an optional, standalone public trade database:
+v68 uses the optional, standalone public trade database:
 
 ```text
 option_trade_flow.db
@@ -67,7 +67,7 @@ option_trade_flow.db-shm
 ```
 
 It is not required for backward-compatible MOS replay and must never make the
-three core databases optional. Dataset Exporter v1.2 includes it automatically
+three core databases optional. Dataset Exporter v1.2.1 includes it automatically
 when present.
 
 ```sql
@@ -83,11 +83,22 @@ FROM option_trades
 GROUP BY exchange;
 
 SELECT exchange, connection_state, connection_count, reconnect_count,
+       session_id, process_started_at_utc,
        message_count, normalized_trade_count, queued_trade_count,
        dropped_trade_count, last_message_utc, last_trade_utc,
        last_error, updated_at_utc
 FROM collector_status
 ORDER BY exchange;
+
+SELECT exchange, session_id,
+       MIN(updated_at_utc) AS first_sample,
+       MAX(updated_at_utc) AS last_sample,
+       COUNT(*) AS samples,
+       SUM(connection_state != 'subscribed') AS unhealthy_samples,
+       MAX(dropped_trade_count) AS session_drops
+FROM collector_status_history
+GROUP BY exchange, session_id
+ORDER BY first_sample;
 ```
 
 Acceptance for a valid option-flow window:
@@ -98,6 +109,9 @@ both collector_status rows exist
 connection_state = subscribed during healthy network access
 updated_at_utc age <= 15 seconds while the launcher is running
 dropped_trade_count = 0
+collector_status_history exists for both exchanges
+session IDs survive restart and prior rows are not overwritten
+no session used for inference has MAX(dropped_trade_count) > 0
 trade IDs remain unique per exchange
 all parsed option rows have canonical contract_id, expiry, strike and option_type
 ```

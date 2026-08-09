@@ -13,6 +13,7 @@ import logging
 import os
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -34,7 +35,7 @@ except ImportError:  # pragma: no cover - exercised only by package-style import
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "option_trade_flow.db"
 QUEUE_MAXSIZE = 50_000
 WRITE_BATCH_SIZE = 1_000
@@ -240,6 +241,8 @@ class OptionTradeFlowStore:
                     ON option_trades(exchange, trade_timestamp_utc);
                 CREATE TABLE IF NOT EXISTS collector_status (
                     exchange TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    process_started_at_utc REAL NOT NULL DEFAULT 0,
                     connection_state TEXT NOT NULL,
                     connection_count INTEGER NOT NULL,
                     reconnect_count INTEGER NOT NULL,
@@ -252,12 +255,46 @@ class OptionTradeFlowStore:
                     last_error TEXT NOT NULL,
                     updated_at_utc REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS collector_status_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    process_started_at_utc REAL NOT NULL,
+                    exchange TEXT NOT NULL,
+                    connection_state TEXT NOT NULL,
+                    connection_count INTEGER NOT NULL,
+                    reconnect_count INTEGER NOT NULL,
+                    message_count INTEGER NOT NULL,
+                    normalized_trade_count INTEGER NOT NULL,
+                    queued_trade_count INTEGER NOT NULL,
+                    dropped_trade_count INTEGER NOT NULL,
+                    last_message_utc REAL,
+                    last_trade_utc REAL,
+                    last_error TEXT NOT NULL,
+                    updated_at_utc REAL NOT NULL,
+                    UNIQUE(session_id, exchange, updated_at_utc)
+                );
+                CREATE INDEX IF NOT EXISTS idx_option_flow_status_history_time
+                    ON collector_status_history(updated_at_utc);
+                CREATE INDEX IF NOT EXISTS idx_option_flow_status_history_session
+                    ON collector_status_history(session_id, exchange, updated_at_utc);
                 CREATE TABLE IF NOT EXISTS metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
                 """
             )
+            current_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(collector_status)")
+            }
+            if "session_id" not in current_columns:
+                connection.execute(
+                    "ALTER TABLE collector_status ADD COLUMN session_id TEXT NOT NULL DEFAULT ''"
+                )
+            if "process_started_at_utc" not in current_columns:
+                connection.execute(
+                    "ALTER TABLE collector_status ADD COLUMN "
+                    "process_started_at_utc REAL NOT NULL DEFAULT 0"
+                )
             connection.execute(
                 "INSERT OR REPLACE INTO metadata(key, value) VALUES('schema_version', ?)",
                 (SCHEMA_VERSION,),
@@ -285,11 +322,18 @@ class OptionTradeFlowStore:
         finally:
             connection.close()
 
-    def write_status(self, statuses: dict[str, dict[str, Any]]) -> None:
+    def write_status(
+        self,
+        statuses: dict[str, dict[str, Any]],
+        session_id: str,
+        process_started_at_utc: float,
+    ) -> None:
         now = time.time()
         rows = [
             (
                 exchange,
+                session_id,
+                process_started_at_utc,
                 status["connection_state"],
                 status["connection_count"],
                 status["reconnect_count"],
@@ -309,8 +353,15 @@ class OptionTradeFlowStore:
             connection.execute("PRAGMA busy_timeout = 30000")
             connection.executemany(
                 """
-                INSERT INTO collector_status VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO collector_status (
+                    exchange, session_id, process_started_at_utc, connection_state,
+                    connection_count, reconnect_count, message_count,
+                    normalized_trade_count, queued_trade_count, dropped_trade_count,
+                    last_message_utc, last_trade_utc, last_error, updated_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(exchange) DO UPDATE SET
+                    session_id=excluded.session_id,
+                    process_started_at_utc=excluded.process_started_at_utc,
                     connection_state=excluded.connection_state,
                     connection_count=excluded.connection_count,
                     reconnect_count=excluded.reconnect_count,
@@ -325,6 +376,17 @@ class OptionTradeFlowStore:
                 """,
                 rows,
             )
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO collector_status_history (
+                    exchange, session_id, process_started_at_utc, connection_state,
+                    connection_count, reconnect_count, message_count,
+                    normalized_trade_count, queued_trade_count, dropped_trade_count,
+                    last_message_utc, last_trade_utc, last_error, updated_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
             connection.commit()
         finally:
             connection.close()
@@ -333,6 +395,8 @@ class OptionTradeFlowStore:
 class OptionTradeFlowCollector:
     def __init__(self, database_path: Path | str = DEFAULT_DB_PATH):
         self.store = OptionTradeFlowStore(database_path)
+        self.session_id = uuid.uuid4().hex
+        self.process_started_at_utc = time.time()
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
         self.running = False
         self.last_backfill_utc: dict[str, float] = {"bybit": 0.0, "deribit": 0.0}
@@ -538,7 +602,12 @@ class OptionTradeFlowCollector:
                     self.queue.task_done()
             now = time.time()
             if now - last_status_flush >= STATUS_FLUSH_SECONDS:
-                await asyncio.to_thread(self.store.write_status, self.statuses)
+                await asyncio.to_thread(
+                    self.store.write_status,
+                    self.statuses,
+                    self.session_id,
+                    self.process_started_at_utc,
+                )
                 last_status_flush = now
 
     async def run(self) -> None:
@@ -566,7 +635,14 @@ class OptionTradeFlowCollector:
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     writer_task.cancel()
             await asyncio.gather(writer_task, return_exceptions=True)
-            await asyncio.to_thread(self.store.write_status, self.statuses)
+            for status in self.statuses.values():
+                status["connection_state"] = "stopped"
+            await asyncio.to_thread(
+                self.store.write_status,
+                self.statuses,
+                self.session_id,
+                self.process_started_at_utc,
+            )
 
 
 async def _main() -> None:

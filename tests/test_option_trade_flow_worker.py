@@ -116,7 +116,7 @@ class OptionTradeFlowStoreTest(unittest.TestCase):
             }
             for exchange in ("bybit", "deribit")
         }
-        self.store.write_status(status)
+        self.store.write_status(status, "session-test", 1786299900.0)
 
         connection = sqlite3.connect(self.path)
         try:
@@ -124,8 +124,69 @@ class OptionTradeFlowStoreTest(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM option_trades").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM collector_status").fetchone()[0], 2)
             self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM collector_status_history").fetchone()[0],
+                2,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(DISTINCT session_id) FROM collector_status_history"
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
                 connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0],
-                "1.0",
+                "1.1",
+            )
+        finally:
+            connection.close()
+
+    def test_migrates_v1_current_status_without_clean_database(self):
+        legacy_path = Path(self.temp_dir.name) / "legacy_option_trade_flow.db"
+        connection = sqlite3.connect(legacy_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE collector_status (
+                    exchange TEXT PRIMARY KEY,
+                    connection_state TEXT NOT NULL,
+                    connection_count INTEGER NOT NULL,
+                    reconnect_count INTEGER NOT NULL,
+                    message_count INTEGER NOT NULL,
+                    normalized_trade_count INTEGER NOT NULL,
+                    queued_trade_count INTEGER NOT NULL,
+                    dropped_trade_count INTEGER NOT NULL,
+                    last_message_utc REAL,
+                    last_trade_utc REAL,
+                    last_error TEXT NOT NULL,
+                    updated_at_utc REAL NOT NULL
+                )
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        OptionTradeFlowStore(legacy_path).initialize()
+
+        connection = sqlite3.connect(legacy_path)
+        try:
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(collector_status)")
+            }
+            self.assertIn("session_id", columns)
+            self.assertIn("process_started_at_utc", columns)
+            self.assertEqual(
+                connection.execute(
+                    "SELECT value FROM metadata WHERE key='schema_version'"
+                ).fetchone()[0],
+                "1.1",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master "
+                    "WHERE type='table' AND name='collector_status_history'"
+                ).fetchone()[0],
+                1,
             )
         finally:
             connection.close()
