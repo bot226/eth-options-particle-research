@@ -139,3 +139,16 @@ six maturity/moneyness segments, combined/Bybit/Deribit scopes, 15/30/60-minute
 outcomes, all observations versus the frozen false-sweep context, and direct
 versus inverse economic direction. Every inspected rule remains inside its
 declared Holm and shared-day max-T family.
+
+The same causal join is applied to MOS regime snapshots. Separate preregistered
+contexts cover COMPRESSION/PINNING, EXPANSION/BREAKOUT, positive and negative
+Gamma, and an active execution window. Fixed combinations test agreement of
+contract flow with signed delta, delta weighted by gamma, joint gamma/vega
+pressure and delta pressure weighted by trade activity. They are hypotheses in
+the original family, not extra post-hoc searches.
+
+For every selected directional timestamp the analyzer also trades two frozen
+price-only controls using the sign of the trailing return over the same lookback:
+continuation and reversal. Option flow must beat both controls with a positive
+day-block 95% lower confidence bound in addition to producing positive net PnL,
+passing Holm/max-T and agreeing across Bybit and Deribit.

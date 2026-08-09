@@ -5,7 +5,7 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v61"
+CODE_VERSION = "research_fix_2026_08_09_v62"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
@@ -387,7 +387,7 @@ and shared-day max-T significance, and same-sign exchange confirmation. Even a
 statistically confirmed result remains prohibited from live entry changes until
 a separate reviewed version explicitly promotes it.
 
-Offline research model v1.0.0 is implemented in v61. It performs the causal
+Offline research model v1.1.0 is implemented in v62. It performs the causal
 same-contract Greek join, builds the frozen 5/15/30-minute direction and range
 features, aligns 15/30/60-minute Bybit linear outcomes, detects only the frozen
 30/15/2-bps false-sweep context, suppresses overlapping positions, charges
@@ -395,6 +395,15 @@ features, aligns 15/30/60-minute Bybit linear outcomes, detects only the frozen
 multiple-testing family. Synthetic tests prove that later Greek snapshots and
 future-day observations cannot enter earlier features or thresholds. It has not
 yet seen a qualifying v68 dataset and therefore has produced no trading claim.
+
+v1.1.0 additionally joins each decision only to an earlier MOS snapshot and
+tests the frozen COMPRESSION/PINNING, EXPANSION/BREAKOUT, positive/negative
+Gamma and active-execution regimes. Predeclared delta/contract,
+delta-times-gamma, gamma/vega and delta-times-activity combinations remain in
+the same multiple-testing families. A directional rule must beat both trailing
+price continuation and price reversal on the exact same timestamps with a
+positive day-block 95% lower confidence bound; positive standalone PnL is no
+longer sufficient.
 
 The worker is enabled by the standard launcher. Set
 `MOS_OPTION_TRADE_FLOW_ENABLED=0` before launch to disable it without affecting

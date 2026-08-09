@@ -3,11 +3,13 @@ import math
 import sqlite3
 import tempfile
 import unittest
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from backend.scripts.option_flow_research import (
     EnrichedOptionTrade,
+    DecisionContext,
     FlowFeaturePoint,
     FuturesCandle,
     aggregate_trade_flow_buckets,
@@ -18,11 +20,20 @@ from backend.scripts.option_flow_research import (
     holm_adjust,
     load_protocol,
     load_enriched_option_trades,
+    load_decision_contexts,
     prior_day_quantile_observations,
     promotion_decision,
     protocol_content_sha256,
     rolling_flow_feature_points,
+    run_frozen_analysis,
     shared_day_max_t_p_values,
+    _feature_value,
+    _context_matches,
+)
+from backend.workers.option_trade_flow_worker import (
+    OptionTradeFlowStore,
+    normalize_bybit_trade,
+    normalize_deribit_trade,
 )
 
 
@@ -101,6 +112,8 @@ class FrozenPromotionGateTest(unittest.TestCase):
             "positive_day_ratio_15bps": 0.8,
             "mean_net_pct_by_cost": {"6": 0.10, "10": 0.08, "15": 0.03},
             "ci_95_15bps": [0.01, 0.05],
+            "ci_95_vs_price_continuation": [0.01, 0.08],
+            "ci_95_vs_price_reversal": [0.01, 0.08],
             "holm_p": 0.01,
             "max_t_p": 0.02,
             "exchange_sign_confirmation": True,
@@ -116,6 +129,8 @@ class FrozenPromotionGateTest(unittest.TestCase):
             "positive_day_ratio_15bps": 0.8,
             "mean_net_pct_by_cost": {"6": 0.10, "10": 0.04, "15": -0.01},
             "ci_95_15bps": [0.01, 0.05],
+            "ci_95_vs_price_continuation": [0.01, 0.08],
+            "ci_95_vs_price_reversal": [0.01, 0.08],
             "holm_p": 0.01,
             "max_t_p": 0.02,
             "exchange_sign_confirmation": True,
@@ -230,6 +245,35 @@ class FeatureConstructionTest(unittest.TestCase):
         self.assertEqual(second.trade_intensity, 2)
         self.assertAlmostEqual(second.call_put_contract_imbalance, -0.8)
 
+    def test_preregistered_combinations_have_fixed_economic_formulas(self):
+        point = FlowFeaturePoint(
+            timestamp_utc=300,
+            scope="combined",
+            trade_filter="all",
+            segment="all",
+            lookback_sec=300,
+            call_put_contract_imbalance=0.6,
+            signed_delta_imbalance=0.4,
+            absolute_signed_gamma_imbalance=0.5,
+            absolute_signed_vega_imbalance=0.3,
+            trade_intensity=9,
+            greek_match_ratio=1.0,
+        )
+        self.assertAlmostEqual(_feature_value(point, "delta_contract_consensus"), 0.5)
+        self.assertAlmostEqual(_feature_value(point, "delta_gamma_interaction"), 0.2)
+        self.assertAlmostEqual(_feature_value(point, "gamma_vega_joint"), 0.3)
+        self.assertAlmostEqual(
+            _feature_value(point, "delta_activity_interaction"),
+            0.4 * math.log(10),
+        )
+        disagree = FlowFeaturePoint(
+            **{
+                **point.__dict__,
+                "signed_delta_imbalance": -0.4,
+            }
+        )
+        self.assertEqual(_feature_value(disagree, "delta_contract_consensus"), 0.0)
+
 
 class EarlierGreekJoinTest(unittest.TestCase):
     def setUp(self):
@@ -314,6 +358,57 @@ class FuturesOutcomeAlignmentTest(unittest.TestCase):
         self.assertEqual(outcome.start_close, 130.0)
         self.assertEqual(outcome.end_close, 145.0)
         self.assertAlmostEqual(outcome.future_return_pct, (145 / 130 - 1) * 100)
+        self.assertAlmostEqual(outcome.trailing_returns_pct[300], (130 / 125 - 1) * 100)
+
+
+class EarlierMosContextJoinTest(unittest.TestCase):
+    def test_decision_context_uses_only_latest_prior_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mos_research.db"
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE snapshots (
+                        timestamp_utc REAL, current_state TEXT,
+                        gamma_regime TEXT, execution_timing_state TEXT,
+                        exclude_from_analysis INTEGER
+                    )
+                    """
+                )
+                connection.executemany(
+                    "INSERT INTO snapshots VALUES (?,?,?,?,0)",
+                    [
+                        (900, "COMPRESSION", "POSITIVE_GAMMA", "WAIT"),
+                        (1010, "EXPANSION", "NEGATIVE_GAMMA", "EXECUTION_WINDOW"),
+                    ],
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            contexts = load_decision_contexts(
+                {"mos_research.db": path}, [1000], max_age_sec=120
+            )
+
+        self.assertEqual(contexts[1000].snapshot_timestamp_utc, 900)
+        self.assertEqual(contexts[1000].current_state, "COMPRESSION")
+        self.assertEqual(contexts[1000].gamma_regime, "POSITIVE_GAMMA")
+
+    def test_frozen_regime_contexts_are_exact_not_fuzzy(self):
+        context = DecisionContext(
+            decision_timestamp_utc=1000,
+            snapshot_timestamp_utc=990,
+            current_state="COMPRESSION",
+            gamma_regime="POSITIVE_GAMMA",
+            execution_timing_state="WAIT",
+        )
+        outcome = type("Outcome", (), {"false_sweep_direction": -1})()
+        self.assertTrue(_context_matches("mos_compression_or_pinning", outcome, context))
+        self.assertTrue(_context_matches("positive_gamma", outcome, context))
+        self.assertTrue(_context_matches("false_sweep_30m_15m_2bps", outcome, context))
+        self.assertFalse(_context_matches("negative_gamma", outcome, context))
+        self.assertFalse(_context_matches("execution_active", outcome, context))
 
 
 class FrozenDirectionEvaluationTest(unittest.TestCase):
@@ -325,7 +420,7 @@ class FrozenDirectionEvaluationTest(unittest.TestCase):
                 "minimum_test_days": 3,
                 "minimum_trades": 3,
                 "minimum_positive_day_ratio": 0.6,
-                "signal_quantile": 0.5,
+                "signal_quantile": 0.4,
                 "horizons_sec": [300],
                 "direction_features": ["call_put_contract_imbalance"],
                 "contexts": ["all"],
@@ -363,6 +458,7 @@ class FrozenDirectionEvaluationTest(unittest.TestCase):
                     {
                         "future_return_pct": (0.5 if value > 0 else -0.5),
                         "false_sweep_direction": 0,
+                        "trailing_returns_pct": {300: 0.1},
                     },
                 )()
 
@@ -428,6 +524,218 @@ class FrozenDirectionEvaluationTest(unittest.TestCase):
         self.assertGreater(combined["mean_range_lift_pct_points"], 0)
         self.assertTrue(combined["statistically_confirmed"])
         self.assertFalse(combined["live_entry_changes_allowed"])
+
+
+class EndToEndDatasetTest(unittest.TestCase):
+    def test_full_sqlite_pipeline_runs_after_readiness_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            flow_path = root / "option_trade_flow.db"
+            history_path = root / "history.db"
+            research_path = root / "mos_research.db"
+            protocol_path = root / "protocol.json"
+
+            store = OptionTradeFlowStore(flow_path)
+            store.initialize()
+            decisions = [
+                _timestamp(day, 60 + slot * 10)
+                for day in range(3)
+                for slot in range(2)
+            ]
+            trades = []
+            for index, decision in enumerate(decisions):
+                timestamp_ms = int((decision - 20) * 1000)
+                side = "Buy" if index % 2 == 0 else "Sell"
+                trades.append(
+                    normalize_bybit_trade(
+                        {
+                            "T": timestamp_ms,
+                            "s": "BTC-25SEP26-70000-C-USDT",
+                            "S": side,
+                            "v": "2",
+                            "p": "0.02",
+                            "i": f"bybit-{index}",
+                            "iv": "0.50",
+                        }
+                    )
+                )
+                trades.append(
+                    normalize_deribit_trade(
+                        {
+                            "timestamp": timestamp_ms,
+                            "instrument_name": "BTC-25SEP26-70000-C",
+                            "direction": side.lower(),
+                            "amount": 2,
+                            "price": 0.02,
+                            "trade_id": f"deribit-{index}",
+                            "iv": 50,
+                        }
+                    )
+                )
+            store.insert_trades(trades)
+
+            connection = sqlite3.connect(flow_path)
+            try:
+                status_rows = []
+                for exchange in ("bybit", "deribit"):
+                    for decision in decisions:
+                        for sample in range(30):
+                            updated = decision - 295 + sample * 5
+                            status_rows.append(
+                                (
+                                    f"session-{exchange}",
+                                    decisions[0] - 600,
+                                    exchange,
+                                    "subscribed",
+                                    1,
+                                    0,
+                                    10,
+                                    10,
+                                    10,
+                                    0,
+                                    updated,
+                                    updated,
+                                    "",
+                                    updated,
+                                )
+                            )
+                connection.executemany(
+                    """
+                    INSERT INTO collector_status_history (
+                        session_id, process_started_at_utc, exchange,
+                        connection_state, connection_count, reconnect_count,
+                        message_count, normalized_trade_count, queued_trade_count,
+                        dropped_trade_count, last_message_utc, last_trade_utc,
+                        last_error, updated_at_utc
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    status_rows,
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            connection = sqlite3.connect(history_path)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE option_contract_snapshots (
+                        ts REAL, exchange TEXT, contract_id TEXT, delta REAL,
+                        gamma REAL, vega REAL, mark_iv REAL,
+                        underlying_price REAL
+                    )
+                    """
+                )
+                snapshot_rows = []
+                for decision in decisions:
+                    for exchange in ("bybit", "deribit"):
+                        snapshot_rows.append(
+                            (
+                                decision - 50,
+                                exchange,
+                                "BTC-20260925-70000-C",
+                                0.5,
+                                0.01,
+                                2.0,
+                                0.49,
+                                70000.0,
+                            )
+                        )
+                connection.executemany(
+                    "INSERT INTO option_contract_snapshots VALUES (?,?,?,?,?,?,?,?)",
+                    snapshot_rows,
+                )
+                connection.execute(
+                    "CREATE INDEX idx_contract_test ON "
+                    "option_contract_snapshots(exchange, contract_id, ts)"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            connection = sqlite3.connect(research_path)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE ohlcv_candles (
+                        timestamp_utc REAL, symbol TEXT, timeframe TEXT,
+                        high REAL, low REAL, close REAL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE snapshots (
+                        timestamp_utc REAL, current_state TEXT,
+                        gamma_regime TEXT, execution_timing_state TEXT,
+                        exclude_from_analysis INTEGER
+                    )
+                    """
+                )
+                first = int(decisions[0] - 1800)
+                last = int(decisions[-1] + 600)
+                candle_rows = []
+                for timestamp in range(first, last + 1, 60):
+                    price = 70000.0 + ((timestamp - first) // 60) * 0.5
+                    candle_rows.append(
+                        (timestamp, "BTCUSDT", "1m", price + 5, price - 5, price)
+                    )
+                connection.executemany(
+                    "INSERT INTO ohlcv_candles VALUES (?,?,?,?,?,?)", candle_rows
+                )
+                connection.executemany(
+                    "INSERT INTO snapshots VALUES (?,?,?,?,0)",
+                    [
+                        (
+                            decision - 40,
+                            "COMPRESSION",
+                            "POSITIVE_GAMMA",
+                            "WAIT",
+                        )
+                        for decision in decisions
+                    ],
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            protocol = load_protocol()
+            protocol.update(
+                {
+                    "lookbacks_sec": [300],
+                    "horizons_sec": [300],
+                    "training_days": 1,
+                    "minimum_total_days": 0,
+                    "minimum_test_days": 1,
+                    "minimum_trades": 1,
+                    "signal_quantile": 0.5,
+                    "contexts": ["all"],
+                    "direction_features": ["call_put_contract_imbalance"],
+                    "direction_modes": ["direct"],
+                    "range_features": ["trade_intensity"],
+                    "bootstrap_samples": 20,
+                    "permutation_samples": 20,
+                }
+            )
+            protocol_path.write_text(
+                json.dumps(protocol), encoding="utf-8"
+            )
+
+            result = run_frozen_analysis(root, protocol_path)
+            archive_path = root / "dataset.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                for name in ("mos_research.db", "history.db", "option_trade_flow.db"):
+                    archive.write(root / name, arcname=name)
+            zip_result = run_frozen_analysis(archive_path, protocol_path)
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["audit"]["status"], "ready")
+        self.assertEqual(result["enriched_trades"], 12)
+        self.assertEqual(result["greek_matched_trades"], 12)
+        self.assertGreater(result["direction_rule_count"], 0)
+        self.assertEqual(result["live_entry_change_count"], 0)
+        self.assertEqual(zip_result["status"], "complete")
+        self.assertEqual(zip_result["protocol_sha256"], result["protocol_sha256"])
 
 
 if __name__ == "__main__":

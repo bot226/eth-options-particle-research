@@ -27,7 +27,7 @@ from scipy import stats
 
 
 REQUIRED_FILES = ("mos_research.db", "history.db", "option_trade_flow.db")
-OPTION_FLOW_RESEARCH_VERSION = "1.0.0"
+OPTION_FLOW_RESEARCH_VERSION = "1.1.0"
 DEFAULT_PROTOCOL_PATH = (
     Path(__file__).resolve().parents[2]
     / "docs"
@@ -170,6 +170,16 @@ class FuturesOutcome:
     future_return_pct: float
     future_range_pct: float
     false_sweep_direction: int
+    trailing_returns_pct: Mapping[int, float]
+
+
+@dataclass(frozen=True)
+class DecisionContext:
+    decision_timestamp_utc: float
+    snapshot_timestamp_utc: float
+    current_state: str
+    gamma_regime: str
+    execution_timing_state: str
 
 
 @dataclass(frozen=True)
@@ -330,6 +340,12 @@ def _table_names(connection: sqlite3.Connection) -> set[str]:
     }
 
 
+def _column_names(connection: sqlite3.Connection, table: str) -> set[str]:
+    if not table.replace("_", "").isalnum():
+        raise ResearchInputError(f"Unsafe table name: {table}")
+    return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
 def _scalar(connection: sqlite3.Connection, query: str, params: Sequence[Any] = ()) -> Any:
     row = connection.execute(query, params).fetchone()
     return row[0] if row else None
@@ -349,14 +365,32 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
             "metadata",
         }
         missing_flow_tables = sorted(required_flow_tables - flow_tables)
+        flow_column_requirements = {
+            "option_trades": {
+                "exchange", "trade_timestamp_utc", "contract_id",
+                "trade_iv_decimal", "taker_side", "contracts", "amount",
+                "option_type", "expiry", "strike", "is_block_trade",
+                "is_combo_trade",
+            },
+            "collector_status_history": {
+                "exchange", "session_id", "connection_state",
+                "dropped_trade_count", "updated_at_utc",
+            },
+            "metadata": {"key", "value"},
+        }
+        missing_flow_columns = {
+            table: sorted(columns - _column_names(flow, table))
+            for table, columns in flow_column_requirements.items()
+            if table in flow_tables and columns - _column_names(flow, table)
+        }
         schema_version = (
             _scalar(flow, "SELECT value FROM metadata WHERE key='schema_version'")
-            if "metadata" in flow_tables
+            if "metadata" in flow_tables and "metadata" not in missing_flow_columns
             else None
         )
         integrity = _scalar(flow, "PRAGMA quick_check")
         trade_rows = []
-        if "option_trades" in flow_tables:
+        if "option_trades" in flow_tables and "option_trades" not in missing_flow_columns:
             trade_rows = [
                 dict(row)
                 for row in flow.execute(
@@ -373,7 +407,10 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
             ]
         session_rows: list[dict[str, Any]] = []
         status_samples: list[dict[str, Any]] = []
-        if "collector_status_history" in flow_tables:
+        if (
+            "collector_status_history" in flow_tables
+            and "collector_status_history" not in missing_flow_columns
+        ):
             session_rows = [
                 dict(row)
                 for row in flow.execute(
@@ -438,7 +475,21 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
         healthy_days = len(common_healthy) * 300.0 / 86400.0
 
         research_tables = _table_names(research)
-        if "ohlcv_candles" in research_tables:
+        research_column_requirements = {
+            "ohlcv_candles": {
+                "timestamp_utc", "symbol", "timeframe", "high", "low", "close",
+            },
+            "snapshots": {
+                "timestamp_utc", "current_state", "gamma_regime",
+                "execution_timing_state", "exclude_from_analysis",
+            },
+        }
+        missing_research_columns = {
+            table: sorted(columns - _column_names(research, table))
+            for table, columns in research_column_requirements.items()
+            if table in research_tables and columns - _column_names(research, table)
+        }
+        if "ohlcv_candles" in research_tables and "ohlcv_candles" not in missing_research_columns:
             candle_range = dict(
                 research.execute(
                     """
@@ -453,8 +504,20 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
         else:
             candle_range = {"candles": 0, "first_candle_utc": None, "last_candle_utc": None}
         history_tables = _table_names(history)
+        history_required_columns = {
+            "ts", "exchange", "contract_id", "delta", "gamma", "vega",
+            "mark_iv", "underlying_price",
+        }
+        missing_history_columns = (
+            sorted(
+                history_required_columns
+                - _column_names(history, "option_contract_snapshots")
+            )
+            if "option_contract_snapshots" in history_tables
+            else sorted(history_required_columns)
+        )
         contract_range = {"contract_snapshots": 0, "first_snapshot_utc": None, "last_snapshot_utc": None}
-        if "option_contract_snapshots" in history_tables:
+        if "option_contract_snapshots" in history_tables and not missing_history_columns:
             contract_range = dict(
                 history.execute(
                     """
@@ -493,6 +556,14 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
             blockers.append("option_flow_quick_check_failed")
         if missing_flow_tables:
             blockers.append("option_flow_schema_incomplete")
+        if missing_flow_columns:
+            blockers.append("option_flow_columns_incomplete")
+        if "snapshots" not in research_tables or "ohlcv_candles" not in research_tables:
+            blockers.append("research_tables_incomplete")
+        if missing_research_columns:
+            blockers.append("research_columns_incomplete")
+        if missing_history_columns:
+            blockers.append("contract_snapshot_columns_incomplete")
         if schema_version != "1.1":
             blockers.append("quality_history_schema_not_v1_1")
         if exchanges != {"bybit", "deribit"}:
@@ -511,6 +582,9 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
             "protocol": protocol["protocol"],
             "protocol_sha256": protocol_content_sha256(protocol),
             "flow_schema_version": schema_version,
+            "missing_flow_columns": missing_flow_columns,
+            "missing_research_columns": missing_research_columns,
+            "missing_contract_snapshot_columns": missing_history_columns,
             "quick_check": integrity,
             "trades": total_trades,
             "trade_exchanges": trade_rows,
@@ -756,19 +830,97 @@ def load_futures_candles(paths: Mapping[str, Path]) -> list[FuturesCandle]:
     ]
 
 
+def load_decision_contexts(
+    paths: Mapping[str, Path],
+    decision_timestamps: Iterable[float],
+    *,
+    max_age_sec: float,
+) -> dict[float, DecisionContext]:
+    """Join each decision to the latest earlier MOS snapshot, never the future."""
+    connection = _read_only(paths["mos_research.db"])
+    try:
+        rows = connection.execute(
+            """
+            SELECT timestamp_utc, current_state, gamma_regime,
+                   execution_timing_state
+            FROM snapshots
+            WHERE exclude_from_analysis = 0 OR exclude_from_analysis IS NULL
+            ORDER BY timestamp_utc
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+    snapshot_times = [float(row["timestamp_utc"]) for row in rows]
+    result: dict[float, DecisionContext] = {}
+    for decision in sorted(set(float(value) for value in decision_timestamps)):
+        index = bisect.bisect_right(snapshot_times, decision) - 1
+        if index < 0 or decision - snapshot_times[index] > max_age_sec:
+            continue
+        row = rows[index]
+        result[decision] = DecisionContext(
+            decision_timestamp_utc=decision,
+            snapshot_timestamp_utc=snapshot_times[index],
+            current_state=str(row["current_state"] or "UNKNOWN"),
+            gamma_regime=str(row["gamma_regime"] or "UNKNOWN"),
+            execution_timing_state=str(row["execution_timing_state"] or "UNKNOWN"),
+        )
+    return result
+
+
+def _context_matches(
+    context_name: str,
+    outcome: FuturesOutcome,
+    decision_context: DecisionContext | None,
+) -> bool:
+    if context_name == "all":
+        return True
+    if context_name == "false_sweep_30m_15m_2bps":
+        return bool(outcome.false_sweep_direction)
+    if decision_context is None:
+        return False
+    if context_name == "mos_compression_or_pinning":
+        return decision_context.current_state in {"COMPRESSION", "PINNING"}
+    if context_name == "mos_expansion_or_breakout":
+        return decision_context.current_state in {
+            "EXPANSION",
+            "BREAKOUT_SETUP",
+            "SQUEEZE",
+            "PANIC",
+        }
+    if context_name == "negative_gamma":
+        return decision_context.gamma_regime == "NEGATIVE_GAMMA"
+    if context_name == "positive_gamma":
+        return decision_context.gamma_regime == "POSITIVE_GAMMA"
+    if context_name == "execution_active":
+        return decision_context.execution_timing_state in {
+            "EXPANSION_CONFIRMING",
+            "EXECUTION_WINDOW_OPEN",
+            "EXECUTION_WINDOW",
+        }
+    raise ValueError(f"Unknown preregistered context: {context_name}")
+
+
 def _false_sweep_direction(
-    candles: Sequence[FuturesCandle], right_index: int, *, minimum_break_bps: float
+    candles: Sequence[FuturesCandle],
+    right_index: int,
+    *,
+    reference_window_sec: int,
+    probe_window_sec: int,
+    minimum_break_bps: float,
+    requires_close_back_inside: bool,
 ) -> int:
     decision_ts = candles[right_index].timestamp_utc
     reference = [
         candle
         for candle in candles[: right_index + 1]
-        if decision_ts - 1800 < candle.timestamp_utc <= decision_ts - 900
+        if decision_ts - reference_window_sec
+        < candle.timestamp_utc
+        <= decision_ts - probe_window_sec
     ]
     probe = [
         candle
         for candle in candles[: right_index + 1]
-        if decision_ts - 900 < candle.timestamp_utc <= decision_ts
+        if decision_ts - probe_window_sec < candle.timestamp_utc <= decision_ts
     ]
     if not reference or not probe:
         return 0
@@ -778,8 +930,12 @@ def _false_sweep_direction(
     break_fraction = minimum_break_bps / 10_000.0
     upper = max(candle.high for candle in probe) >= reference_high * (1 + break_fraction)
     lower = min(candle.low for candle in probe) <= reference_low * (1 - break_fraction)
-    upper_rejected = upper and close <= reference_high
-    lower_rejected = lower and close >= reference_low
+    upper_rejected = upper and (
+        not requires_close_back_inside or close <= reference_high
+    )
+    lower_rejected = lower and (
+        not requires_close_back_inside or close >= reference_low
+    )
     if upper_rejected == lower_rejected:
         return 0
     return -1 if upper_rejected else 1
@@ -792,6 +948,10 @@ def build_futures_outcomes(
     horizons_sec: Iterable[int],
     max_alignment_sec: float,
     false_sweep_break_bps: float = 2.0,
+    false_sweep_reference_window_sec: int = 1800,
+    false_sweep_probe_window_sec: int = 900,
+    false_sweep_requires_close_back_inside: bool = True,
+    trailing_lookbacks_sec: Iterable[int] = (300, 900, 1800),
 ) -> dict[tuple[float, int], FuturesOutcome]:
     """Align decisions and future labels; future candles are never used in features."""
     ordered = sorted(candles, key=lambda candle: candle.timestamp_utc)
@@ -802,8 +962,25 @@ def build_futures_outcomes(
         if right < 0 or decision - timestamps[right] > max_alignment_sec:
             continue
         start = ordered[right]
+        trailing_returns: dict[int, float] = {}
+        for lookback in sorted(set(int(value) for value in trailing_lookbacks_sec)):
+            trailing_target = decision - lookback
+            trailing_index = bisect.bisect_left(timestamps, trailing_target)
+            if (
+                trailing_index < len(ordered)
+                and abs(timestamps[trailing_index] - trailing_target) <= max_alignment_sec
+                and ordered[trailing_index].close > 0
+            ):
+                trailing_returns[lookback] = (
+                    start.close / ordered[trailing_index].close - 1.0
+                ) * 100.0
         sweep_direction = _false_sweep_direction(
-            ordered, right, minimum_break_bps=false_sweep_break_bps
+            ordered,
+            right,
+            reference_window_sec=false_sweep_reference_window_sec,
+            probe_window_sec=false_sweep_probe_window_sec,
+            minimum_break_bps=false_sweep_break_bps,
+            requires_close_back_inside=false_sweep_requires_close_back_inside,
         )
         for horizon in sorted(set(int(value) for value in horizons_sec)):
             target = decision + horizon
@@ -826,6 +1003,7 @@ def build_futures_outcomes(
                 future_return_pct=future_return,
                 future_range_pct=future_range,
                 false_sweep_direction=sweep_direction,
+                trailing_returns_pct=trailing_returns,
             )
     return outcomes
 
@@ -946,7 +1124,25 @@ def healthy_decision_timestamps(
 
 
 def _feature_value(point: FlowFeaturePoint, feature: str) -> float | None:
-    value = getattr(point, feature)
+    if feature == "delta_contract_consensus":
+        delta = point.signed_delta_imbalance
+        contract = point.call_put_contract_imbalance
+        if delta is None or contract is None or delta * contract <= 0:
+            return 0.0
+        value = (delta + contract) / 2.0
+    elif feature == "delta_gamma_interaction":
+        delta = point.signed_delta_imbalance
+        gamma = point.absolute_signed_gamma_imbalance
+        value = delta * gamma if delta is not None and gamma is not None else None
+    elif feature == "gamma_vega_joint":
+        gamma = point.absolute_signed_gamma_imbalance
+        vega = point.absolute_signed_vega_imbalance
+        value = min(gamma, vega) if gamma is not None and vega is not None else None
+    elif feature == "delta_activity_interaction":
+        delta = point.signed_delta_imbalance
+        value = abs(delta) * math.log1p(point.trade_intensity) if delta is not None else None
+    else:
+        value = getattr(point, feature)
     if value is None:
         return None
     result = float(value)
@@ -955,20 +1151,25 @@ def _feature_value(point: FlowFeaturePoint, feature: str) -> float | None:
 
 def _summarize_direction_rule(
     spec: DirectionRuleSpec,
-    trades: Sequence[tuple[float, float]],
+    trades: Sequence[tuple[float, float, float, float]],
     protocol: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, list[float]]]:
     costs = [float(value) for value in protocol["futures_round_trip_cost_bps"]]
     mean_net = {
         str(int(cost) if cost.is_integer() else cost): float(
-            np.mean([gross - cost / 100.0 for _, gross in trades])
+            np.mean([gross - cost / 100.0 for _, gross, _, _ in trades])
         )
         for cost in costs
     }
     highest_cost = max(costs)
     day_returns: dict[str, list[float]] = defaultdict(list)
-    for timestamp, gross in trades:
-        day_returns[_utc_day(timestamp)].append(gross - highest_cost / 100.0)
+    vs_continuation: dict[str, list[float]] = defaultdict(list)
+    vs_reversal: dict[str, list[float]] = defaultdict(list)
+    for timestamp, gross, continuation_gross, reversal_gross in trades:
+        day = _utc_day(timestamp)
+        day_returns[day].append(gross - highest_cost / 100.0)
+        vs_continuation[day].append(gross - continuation_gross)
+        vs_reversal[day].append(gross - reversal_gross)
     day_means = [float(np.mean(values)) for values in day_returns.values()]
     positive_ratio = (
         sum(value > 0 for value in day_means) / len(day_means) if day_means else 0.0
@@ -978,6 +1179,7 @@ def _summarize_direction_rule(
         len(trades) >= int(protocol["minimum_trades"])
         and len(day_returns) >= int(protocol["minimum_test_days"])
         and mean_net[str(int(highest_cost) if highest_cost.is_integer() else highest_cost)] > 0
+        and raw_p < 0.05
     )
     if preliminary_bootstrap:
         seed_material = hashlib.sha256(spec.rule_id.encode("utf-8")).digest()[:8]
@@ -987,8 +1189,26 @@ def _summarize_direction_rule(
             samples=int(protocol["bootstrap_samples"]),
             seed=seed,
         )
+        continuation_difference_ci = day_block_bootstrap_ci(
+            vs_continuation,
+            samples=int(protocol["bootstrap_samples"]),
+            seed=seed ^ 0xC01A,
+        )
+        reversal_difference_ci = day_block_bootstrap_ci(
+            vs_reversal,
+            samples=int(protocol["bootstrap_samples"]),
+            seed=seed ^ 0xAE71,
+        )
     else:
         confidence_interval = (float("nan"), float("nan"))
+        continuation_difference_ci = (float("nan"), float("nan"))
+        reversal_difference_ci = (float("nan"), float("nan"))
+    continuation_mean = float(
+        np.mean([gross - highest_cost / 100.0 for _, _, gross, _ in trades])
+    )
+    reversal_mean = float(
+        np.mean([gross - highest_cost / 100.0 for _, _, _, gross in trades])
+    )
     summary = {
         "rule_id": spec.rule_id,
         "spec": {
@@ -1003,10 +1223,17 @@ def _summarize_direction_rule(
         },
         "trades": len(trades),
         "test_days": len(day_returns),
-        "mean_gross_pct": float(np.mean([gross for _, gross in trades])),
+        "mean_gross_pct": float(np.mean([gross for _, gross, _, _ in trades])),
         "mean_net_pct_by_cost": mean_net,
         "positive_day_ratio_15bps": positive_ratio,
         "ci_95_15bps": list(confidence_interval),
+        "price_only_controls_15bps": {
+            "continuation_mean_net_pct": continuation_mean,
+            "reversal_mean_net_pct": reversal_mean,
+            "best_mean_net_pct": max(continuation_mean, reversal_mean),
+        },
+        "ci_95_vs_price_continuation": list(continuation_difference_ci),
+        "ci_95_vs_price_reversal": list(reversal_difference_ci),
         "raw_daily_p": raw_p,
         "holm_p": 1.0,
         "max_t_p": 1.0,
@@ -1020,6 +1247,7 @@ def evaluate_direction_rules(
     outcomes: Mapping[tuple[float, int], FuturesOutcome],
     healthy_timestamps: set[float],
     protocol: Mapping[str, Any],
+    decision_contexts: Mapping[float, DecisionContext] | None = None,
 ) -> list[dict[str, Any]]:
     """Run every frozen direction rule with prior-day thresholds and no overlap."""
     grouped: dict[tuple[str, str, str, int, str], list[tuple[float, float]]] = defaultdict(list)
@@ -1032,7 +1260,11 @@ def evaluate_direction_rules(
             value = _feature_value(point, feature)
             if value is None:
                 continue
-            if feature == "signed_delta_imbalance" and point.greek_match_ratio < minimum_greek_match:
+            if feature in {
+                "signed_delta_imbalance",
+                "delta_contract_consensus",
+                "delta_gamma_interaction",
+            } and point.greek_match_ratio < minimum_greek_match:
                 continue
             grouped[
                 (
@@ -1066,7 +1298,7 @@ def evaluate_direction_rules(
                         mode=str(mode),
                     )
                     next_allowed = -math.inf
-                    trades: list[tuple[float, float]] = []
+                    trades: list[tuple[float, float, float, float]] = []
                     for observation in selected:
                         timestamp = observation.timestamp_utc
                         if timestamp < next_allowed:
@@ -1074,12 +1306,27 @@ def evaluate_direction_rules(
                         outcome = outcomes.get((timestamp, int(horizon)))
                         if outcome is None:
                             continue
-                        if context == "false_sweep_30m_15m_2bps" and not outcome.false_sweep_direction:
+                        if not _context_matches(
+                            str(context),
+                            outcome,
+                            (decision_contexts or {}).get(timestamp),
+                        ):
                             continue
                         signal = 1 if observation.value > 0 else -1
                         if mode == "inverse":
                             signal *= -1
-                        trades.append((timestamp, signal * outcome.future_return_pct))
+                        trailing_return = outcome.trailing_returns_pct.get(int(lookback))
+                        if trailing_return is None or trailing_return == 0:
+                            continue
+                        price_signal = 1 if trailing_return > 0 else -1
+                        trades.append(
+                            (
+                                timestamp,
+                                signal * outcome.future_return_pct,
+                                price_signal * outcome.future_return_pct,
+                                -price_signal * outcome.future_return_pct,
+                            )
+                        )
                         next_allowed = timestamp + int(horizon)
                     if not trades:
                         continue
@@ -1139,6 +1386,7 @@ def evaluate_range_rules(
     outcomes: Mapping[tuple[float, int], FuturesOutcome],
     healthy_timestamps: set[float],
     protocol: Mapping[str, Any],
+    decision_contexts: Mapping[float, DecisionContext] | None = None,
 ) -> list[dict[str, Any]]:
     """Test whether frozen high-flow states predict a larger future BTC range."""
     grouped: dict[tuple[str, str, str, int, str], list[tuple[float, float]]] = defaultdict(list)
@@ -1154,6 +1402,8 @@ def evaluate_range_rules(
             if feature in {
                 "absolute_signed_gamma_imbalance",
                 "absolute_signed_vega_imbalance",
+                "gamma_vega_joint",
+                "delta_activity_interaction",
             } and point.greek_match_ratio < minimum_greek_match:
                 continue
             grouped[
@@ -1198,7 +1448,11 @@ def evaluate_range_rules(
                         outcome = outcomes.get((timestamp, int(horizon)))
                         if outcome is None:
                             continue
-                        if context == "false_sweep_30m_15m_2bps" and not outcome.false_sweep_direction:
+                        if not _context_matches(
+                            str(context),
+                            outcome,
+                            (decision_contexts or {}).get(timestamp),
+                        ):
                             continue
                         target = high_by_day if abs(value) >= threshold else low_by_day
                         target[day].append(outcome.future_range_pct)
@@ -1219,6 +1473,8 @@ def evaluate_range_rules(
                 eligible = (
                     len(high_values) >= int(protocol["minimum_trades"])
                     and len(day_lifts) >= int(protocol["minimum_test_days"])
+                    and float(np.mean([values[0] for values in day_lifts.values()])) > 0
+                    and one_sided_daily_p_value(day_lifts) < 0.05
                 )
                 if eligible:
                     seed_material = hashlib.sha256(spec.rule_id.encode("utf-8")).digest()[:8]
@@ -1445,6 +1701,14 @@ def promotion_decision(summary: Mapping[str, Any], protocol: Mapping[str, Any]) 
             for cost in costs
         ),
         "ci_lower_positive_15bps": float(summary.get("ci_95_15bps", [-math.inf])[0]) > 0,
+        "beats_price_continuation": float(
+            summary.get("ci_95_vs_price_continuation", [-math.inf])[0]
+        )
+        > 0,
+        "beats_price_reversal": float(
+            summary.get("ci_95_vs_price_reversal", [-math.inf])[0]
+        )
+        > 0,
         "holm": float(summary.get("holm_p", 1.0)) < float(gate["holm_adjusted_p_below"]),
         "max_t": float(summary.get("max_t_p", 1.0))
         < float(gate["max_t_adjusted_p_below"]),
@@ -1501,11 +1765,28 @@ def run_frozen_analysis(
             horizons_sec=protocol["horizons_sec"],
             max_alignment_sec=float(protocol["ohlcv_max_alignment_sec"]),
             false_sweep_break_bps=float(protocol["false_sweep"]["minimum_break_bps"]),
+            false_sweep_reference_window_sec=int(
+                protocol["false_sweep"]["reference_window_sec"]
+            ),
+            false_sweep_probe_window_sec=int(
+                protocol["false_sweep"]["probe_window_sec"]
+            ),
+            false_sweep_requires_close_back_inside=bool(
+                protocol["false_sweep"]["requires_close_back_inside"]
+            ),
+            trailing_lookbacks_sec=protocol["lookbacks_sec"],
+        )
+        decision_contexts = load_decision_contexts(
+            paths,
+            decision_times,
+            max_age_sec=float(protocol["mos_context_max_age_sec"]),
         )
         direction_rules = evaluate_direction_rules(
-            feature_points, outcomes, healthy, protocol
+            feature_points, outcomes, healthy, protocol, decision_contexts
         )
-        range_rules = evaluate_range_rules(feature_points, outcomes, healthy, protocol)
+        range_rules = evaluate_range_rules(
+            feature_points, outcomes, healthy, protocol, decision_contexts
+        )
         confirmed = [
             rule for rule in direction_rules if rule["promotion"]["statistically_confirmed"]
         ]
@@ -1523,6 +1804,7 @@ def run_frozen_analysis(
             "feature_points": len(feature_points),
             "healthy_decision_timestamps": len(healthy),
             "outcomes": len(outcomes),
+            "decision_contexts": len(decision_contexts),
             "direction_rule_count": len(direction_rules),
             "statistically_confirmed_rule_count": len(confirmed),
             "range_rule_count": len(range_rules),
