@@ -35,6 +35,11 @@ schema. Do not interpret taker side as a trading signal.
 
 ## Collector validation
 
+At any point, `check_option_flow_readiness.bat` may be run from the project root
+to see how many complete dual-exchange research days have accumulated. A
+non-ready result is expected before the frozen minimum is reached and does not
+require changing thresholds.
+
 Start v59/v67 without clearing any database. After two to five minutes call:
 
 ```text

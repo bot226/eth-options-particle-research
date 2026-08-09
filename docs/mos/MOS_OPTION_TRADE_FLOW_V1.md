@@ -118,6 +118,16 @@ Readiness can be audited without changing a database:
 python -m backend.scripts.option_flow_research <dataset-directory-or-zip>
 ```
 
+For a short collector-facing status on Windows, double-click:
+
+```text
+check_option_flow_readiness.bat
+```
+
+It is read-only and shows clean full-lookback days, remaining days, historical
+queue drops and the exact blockers. It does not run the frozen rule family and
+never changes live entry logic.
+
 The command returns `ready` only when both trade feeds, schema 1.1 quality
 history, contract Greeks, futures OHLCV, zero-drop sessions and at least 14
 healthy common days are present. Its output includes a canonical SHA-256 of the

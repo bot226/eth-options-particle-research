@@ -1,9 +1,11 @@
+import io
 import json
 import math
 import sqlite3
 import tempfile
 import unittest
 import zipfile
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -21,9 +23,11 @@ from backend.scripts.option_flow_research import (
     load_protocol,
     load_enriched_option_trades,
     load_decision_contexts,
+    main,
     prior_day_quantile_observations,
     promotion_decision,
     protocol_content_sha256,
+    render_human_summary,
     rolling_flow_feature_points,
     run_frozen_analysis,
     shared_day_max_t_p_values,
@@ -767,6 +771,49 @@ class EndToEndDatasetTest(unittest.TestCase):
         self.assertEqual(result["live_entry_change_count"], 0)
         self.assertEqual(zip_result["status"], "complete")
         self.assertEqual(zip_result["protocol_sha256"], result["protocol_sha256"])
+
+
+class CollectorFacingReadinessTest(unittest.TestCase):
+    def test_human_summary_reports_progress_and_remaining_days(self):
+        summary = render_human_summary(
+            {
+                "status": "not_ready",
+                "trades": 125,
+                "common_overlap_days": 5.5,
+                "healthy_full_lookback_days": 4.0,
+                "healthy_days_remaining": 10.0,
+                "healthy_progress_ratio": 4.0 / 14.0,
+                "historical_dropped_trades": 0,
+                "blockers": ["insufficient_healthy_dual_exchange_days"],
+            }
+        )
+
+        self.assertIn("COLLECTING CLEAN DATA", summary)
+        self.assertIn("Clean days remaining: 10.00", summary)
+        self.assertIn("Progress: 28.6%", summary)
+        self.assertIn("Historical queue drops: 0", summary)
+
+    def test_human_summary_explains_unavailable_input(self):
+        summary = render_human_summary(
+            {
+                "status": "error",
+                "message": "required database is missing",
+            }
+        )
+
+        self.assertIn("DATA NOT AVAILABLE", summary)
+        self.assertIn("required database is missing", summary)
+
+    def test_main_handles_missing_dataset_without_traceback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "not-created"
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main([str(missing), "--human"])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("DATA NOT AVAILABLE", output.getvalue())
+        self.assertNotIn("Traceback", output.getvalue())
 
 
 if __name__ == "__main__":

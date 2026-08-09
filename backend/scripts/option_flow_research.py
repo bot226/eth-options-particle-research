@@ -27,7 +27,7 @@ from scipy import stats
 
 
 REQUIRED_FILES = ("mos_research.db", "history.db", "option_trade_flow.db")
-OPTION_FLOW_RESEARCH_VERSION = "1.1.1"
+OPTION_FLOW_RESEARCH_VERSION = "1.1.2"
 DEFAULT_PROTOCOL_PATH = (
     Path(__file__).resolve().parents[2]
     / "docs"
@@ -611,6 +611,15 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
             "healthy_dual_exchange_days": healthy_days,
             "healthy_full_lookback_days": full_lookback_days,
             "required_healthy_full_lookback_days": required_full_lookback_days,
+            "calendar_days_remaining": max(0.0, minimum_days - overlap_days),
+            "healthy_days_remaining": max(
+                0.0, required_full_lookback_days - full_lookback_days
+            ),
+            "healthy_progress_ratio": (
+                min(1.0, full_lookback_days / required_full_lookback_days)
+                if required_full_lookback_days > 0
+                else 1.0
+            ),
             "ohlcv": candle_range,
             "contract_snapshots": contract_range,
         }
@@ -1894,11 +1903,44 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def render_human_summary(result: Mapping[str, Any]) -> str:
+    if result.get("status") == "error":
+        return "\n".join(
+            (
+                "MOS OPTION FLOW RESEARCH",
+                "Status: DATA NOT AVAILABLE",
+                f"Reason: {result.get('message', 'unknown error')}",
+                "Start the v68/v64 collector and run this check again later.",
+            )
+        )
+    audit = result.get("audit", result)
+    ready = audit.get("status") == "ready"
+    lines = [
+        "MOS OPTION FLOW RESEARCH",
+        f"Status: {'READY FOR FROZEN ANALYSIS' if ready else 'COLLECTING CLEAN DATA'}",
+        f"Trades: {int(audit.get('trades', 0))}",
+        f"Calendar overlap: {float(audit.get('common_overlap_days', 0.0)):.2f} days",
+        f"Clean full-lookback coverage: {float(audit.get('healthy_full_lookback_days', 0.0)):.2f} days",
+        f"Clean days remaining: {float(audit.get('healthy_days_remaining', 0.0)):.2f}",
+        f"Progress: {100.0 * float(audit.get('healthy_progress_ratio', 0.0)):.1f}%",
+        f"Historical queue drops: {int(audit.get('historical_dropped_trades', 0))}",
+    ]
+    blockers = list(audit.get("blockers", []))
+    if blockers:
+        lines.append("Waiting for: " + ", ".join(blockers))
+    if ready:
+        lines.append("The frozen analysis may now be run; live entries remain unchanged.")
+    return "\n".join(lines)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit MOS option-flow research readiness")
     parser.add_argument("input", type=Path, help="Dataset directory or MOS exporter ZIP")
     parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL_PATH)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--human", action="store_true", help="Print a short collector-facing summary"
+    )
     parser.add_argument(
         "--run-analysis",
         "--run-direction-analysis",
@@ -1907,16 +1949,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Run the frozen direction and range families after readiness passes",
     )
     args = parser.parse_args(argv)
-    result = (
-        run_frozen_analysis(args.input, args.protocol)
-        if args.run_analysis
-        else analyze_readiness(args.input, args.protocol)
-    )
+    try:
+        result = (
+            run_frozen_analysis(args.input, args.protocol)
+            if args.run_analysis
+            else analyze_readiness(args.input, args.protocol)
+        )
+    except (ResearchInputError, sqlite3.DatabaseError, OSError, json.JSONDecodeError) as exc:
+        result = {
+            "status": "error",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
     rendered = json.dumps(_json_safe(result), ensure_ascii=False, indent=2, sort_keys=True)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered + "\n", encoding="utf-8")
-    print(rendered)
+    print(render_human_summary(result) if args.human else rendered)
     return 0 if result["status"] in {"ready", "complete"} else 2
 
 
