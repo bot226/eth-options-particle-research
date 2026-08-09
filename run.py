@@ -25,6 +25,9 @@ def main():
     frontend_dir = os.path.join(project_root, "frontend")
 
     procs = []
+    option_flow_enabled = os.environ.get("MOS_OPTION_TRADE_FLOW_ENABLED", "1").lower() not in {
+        "0", "false", "no", "off"
+    }
 
     try:
         # 1. Запускаем backend (FastAPI + uvicorn)
@@ -63,6 +66,20 @@ def main():
             text=True,
         )
         procs.append(("worker", worker_proc))
+
+        # 4. Отдельный read-only observer публичных опционных сделок.
+        # Он пишет только option_trade_flow.db и не участвует в формулах MOS.
+        if option_flow_enabled:
+            print("[OPTION FLOW] Starting public option trade-flow observer...")
+            option_flow_proc = subprocess.Popen(
+                [sys.executable, "-m", "workers.option_trade_flow_worker"],
+                cwd=backend_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+            )
+            procs.append(("option-flow", option_flow_proc))
 
         # Запускаем потоки чтения логов (daemon=True — умрут вместе с главным процессом)
         for name, proc in procs:

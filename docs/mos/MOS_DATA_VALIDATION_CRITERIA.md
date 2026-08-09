@@ -58,6 +58,54 @@ FROM particle_filter_audit
 GROUP BY metric_name;
 ```
 
+v67 adds an optional, standalone public trade database:
+
+```text
+option_trade_flow.db
+option_trade_flow.db-wal
+option_trade_flow.db-shm
+```
+
+It is not required for backward-compatible MOS replay and must never make the
+three core databases optional. Dataset Exporter v1.2 includes it automatically
+when present.
+
+```sql
+PRAGMA integrity_check;
+
+SELECT exchange, COUNT(*) AS trades,
+       SUM(taker_side = 'BUY') AS buys,
+       SUM(taker_side = 'SELL') AS sells,
+       SUM(contract_id IS NOT NULL) AS normalized_contracts,
+       SUM(trade_iv_decimal IS NOT NULL) AS valid_iv,
+       MIN(trade_timestamp_utc), MAX(trade_timestamp_utc)
+FROM option_trades
+GROUP BY exchange;
+
+SELECT exchange, connection_state, connection_count, reconnect_count,
+       message_count, normalized_trade_count, queued_trade_count,
+       dropped_trade_count, last_message_utc, last_trade_utc,
+       last_error, updated_at_utc
+FROM collector_status
+ORDER BY exchange;
+```
+
+Acceptance for a valid option-flow window:
+
+```text
+quick_check = ok
+both collector_status rows exist
+connection_state = subscribed during healthy network access
+updated_at_utc age <= 15 seconds while the launcher is running
+dropped_trade_count = 0
+trade IDs remain unique per exchange
+all parsed option rows have canonical contract_id, expiry, strike and option_type
+```
+
+Use `/api/research/option-trade-flow-status` for the same read-only runtime
+summary. A network gap that cannot be covered by the recent-trade backfill must
+be marked invalid during later research; never interpolate missing trades.
+
 For v66 Deribit collection, allow three to five minutes for initial core
 warmup, then the non-blocking smoke test must report:
 

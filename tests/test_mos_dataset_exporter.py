@@ -8,6 +8,7 @@ from pathlib import Path
 
 from backend.scripts.mos_dataset_exporter import (
     DatasetExportError,
+    OPTIONAL_DATABASES,
     REQUIRED_DATABASES,
     create_dataset_export,
 )
@@ -27,7 +28,7 @@ class MosDatasetExporterTest(unittest.TestCase):
             "CODE_VERSION = 'test'\n"
             "RESEARCH_SCHEMA_VERSION = '2.0'\n"
             "ENGINE_PATCH_VERSION = 'test'\n"
-            "DATASET_EXPORTER_VERSION = '1.1.0'\n"
+            "DATASET_EXPORTER_VERSION = '1.2.0'\n"
             "PARTICLE_LOGIC_VERSION = 'particle_shadow_v3'\n",
             encoding="utf-8",
         )
@@ -50,6 +51,22 @@ class MosDatasetExporterTest(unittest.TestCase):
             )
             connection.commit()
         self.addCleanup(self._close_connections)
+
+    def _create_optional_trade_flow_database(self):
+        database_name = OPTIONAL_DATABASES[0]
+        connection = sqlite3.connect(self.data_dir / database_name)
+        self.connections.append(connection)
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute(
+            "CREATE TABLE option_trades (trade_timestamp_utc REAL NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE collector_status (updated_at_utc REAL NOT NULL)"
+        )
+        connection.execute("INSERT INTO option_trades VALUES (1786300000.0)")
+        connection.execute("INSERT INTO collector_status VALUES (1786300001.0)")
+        connection.commit()
+        return database_name
 
     def _close_connections(self):
         for connection in self.connections:
@@ -104,6 +121,26 @@ class MosDatasetExporterTest(unittest.TestCase):
                 )
             finally:
                 connection.close()
+
+    def test_includes_optional_trade_flow_database_when_present(self):
+        database_name = self._create_optional_trade_flow_database()
+        archive_path, manifest = create_dataset_export(
+            self.data_dir,
+            self.output_dir,
+            "mos_with_flow",
+            project_root=self.root,
+            started_at=datetime(2026, 8, 9, 18, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertIn(database_name, manifest["dataset"]["included_databases"])
+        self.assertEqual(manifest["dataset"]["optional_databases"], list(OPTIONAL_DATABASES))
+        self.assertEqual(manifest["databases"][database_name]["checks"]["integrity_check"], "ok")
+        self.assertEqual(
+            manifest["databases"][database_name]["time_ranges"]["option_trades"]["rows"],
+            1,
+        )
+        with zipfile.ZipFile(archive_path) as archive:
+            self.assertIn(database_name, archive.namelist())
 
     def test_fails_when_required_database_is_missing(self):
         self.connections[-1].close()

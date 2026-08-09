@@ -25,12 +25,15 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-EXPORTER_VERSION = "1.1.0"
-MANIFEST_VERSION = "1.1"
+EXPORTER_VERSION = "1.2.0"
+MANIFEST_VERSION = "1.2"
 REQUIRED_DATABASES = (
     "mos_research.db",
     "mos_manual.db",
     "history.db",
+)
+OPTIONAL_DATABASES = (
+    "option_trade_flow.db",
 )
 DEFAULT_LABEL = "mos_baseline"
 LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -59,6 +62,10 @@ TIME_COLUMNS: dict[str, dict[str, str]] = {
         "snapshots": "ts",
         "oi_history": "ts",
         "option_contract_snapshots": "ts",
+    },
+    "option_trade_flow.db": {
+        "option_trades": "trade_timestamp_utc",
+        "collector_status": "updated_at_utc",
     },
 }
 
@@ -330,7 +337,11 @@ def _available_archive_path(output_dir: Path, filename: str) -> Path:
         index += 1
 
 
-def _write_archive(staging_dir: Path, archive_path: Path) -> None:
+def _write_archive(
+    staging_dir: Path,
+    archive_path: Path,
+    database_names: Iterable[str],
+) -> None:
     temporary_archive = archive_path.with_suffix(archive_path.suffix + ".tmp")
     try:
         with zipfile.ZipFile(
@@ -340,7 +351,7 @@ def _write_archive(staging_dir: Path, archive_path: Path) -> None:
             compresslevel=6,
         ) as archive:
             archive_members = [
-                *(staging_dir / name for name in REQUIRED_DATABASES),
+                *(staging_dir / name for name in database_names),
                 staging_dir / "manifest.json",
             ]
             for path in sorted(archive_members, key=lambda item: item.name):
@@ -374,6 +385,10 @@ def create_dataset_export(
         raise DatasetExportError(
             "Required MOS databases are missing: " + ", ".join(missing)
         )
+    included_databases = [*REQUIRED_DATABASES]
+    included_databases.extend(
+        name for name in OPTIONAL_DATABASES if (data_dir / name).is_file()
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     export_started = started_at or _utc_now()
@@ -395,6 +410,8 @@ def create_dataset_export(
             "started_at_utc": _iso_utc(export_started),
             "completed_at_utc": None,
             "required_databases": list(REQUIRED_DATABASES),
+            "optional_databases": list(OPTIONAL_DATABASES),
+            "included_databases": included_databases,
         },
         "collector": {
             "hostname": socket.gethostname(),
@@ -416,7 +433,7 @@ def create_dataset_export(
             dir=output_dir,
         ) as temporary_directory:
             staging_dir = Path(temporary_directory)
-            for database_name in REQUIRED_DATABASES:
+            for database_name in included_databases:
                 manifest["databases"][database_name] = _backup_database(
                     data_dir / database_name,
                     staging_dir / database_name,
@@ -429,7 +446,7 @@ def create_dataset_export(
                 + "\n",
                 encoding="utf-8",
             )
-            _write_archive(staging_dir, archive_path)
+            _write_archive(staging_dir, archive_path, included_databases)
     except Exception as exc:
         if isinstance(exc, DatasetExportError):
             raise
@@ -479,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"MOS dataset archive: {archive_path}")
     print(f"SHA256: {_sha256(archive_path)}")
-    for database_name in REQUIRED_DATABASES:
+    for database_name in manifest["dataset"]["included_databases"]:
         metadata = manifest["databases"][database_name]
         row_total = sum(metadata["table_counts"].values())
         print(

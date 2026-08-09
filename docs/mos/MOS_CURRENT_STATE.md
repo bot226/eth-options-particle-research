@@ -5,9 +5,9 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_03_v58"
+CODE_VERSION = "research_fix_2026_08_09_v59"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v66_deribit_ws_qualified_liveness"
+ENGINE_PATCH_VERSION = "v67_option_trade_flow_observer"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
@@ -339,6 +339,37 @@ v66 therefore:
 - leaves ticker freshness, core selection, REST circuit breaker, MOS formulas,
   databases, manual entries, and Particle Logic scoring unchanged.
 
+## Public option trade-flow observer v17
+
+Research on the first six-day contract-level archive found no durable futures
+direction edge in OI, 24-hour volume, IV or Greek snapshots. Several apparent
+Deribit surface factors were caused by contracts disappearing from and returning
+to the cache. Clean matched-contract Bybit changes retained a possible
+movement-magnitude effect after false breakouts, but reversal and continuation
+both remained negative after costs.
+
+v67 therefore adds only missing raw evidence; it does not add a signal:
+
+- runs a standalone observer process for public BTC option trades;
+- subscribes to Bybit `publicTrade.BTC` and Deribit
+  `trades.option.BTC.100ms`, both public channels;
+- records taker side, size, trade/mark/index price, trade IV, block/combo flags,
+  exchange sequence and the untouched raw payload;
+- normalizes every option symbol to the existing canonical contract ID;
+- deduplicates by `(exchange, trade_id)` and reports queue drops and connection
+  health;
+- writes only `option_trade_flow.db`; existing MOS databases and schemas are
+  unchanged;
+- exposes `/api/research/option-trade-flow-status` as a read-only diagnostic;
+- makes Dataset Exporter v1.2 include the new database when it exists;
+- remains an observation-only Research Layer and cannot change State Machine,
+  events, candidates, execution or manual trading.
+
+The worker is enabled by the standard launcher. Set
+`MOS_OPTION_TRADE_FLOW_ENABLED=0` before launch to disable it without affecting
+MOS. Raw trades require later joining to the nearest fresh contract snapshot
+before delta-, gamma- or vega-weighted flow is researched.
+
 ## Latest validated v20 database
 
 Latest validated database showed approximately:
@@ -413,11 +444,9 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v58/v66 to the collector without clearing databases. Verify that a
-60-second quiet ticker interval produces a successful protocol heartbeat and
-an in-place core resubscription instead of repeated full reconnects. Across the
-next 15- and 30-minute checks, core coverage must remain above 70%, heartbeat
-or fresh ticker activity must qualify liveness, and hard reconnect growth must
-be materially lower than the v65 window. Then verify that both Bybit and
-Deribit contract rows reach the next five-minute history snapshot. Do not
-promote contract particles into scoring.
+Deploy v59/v67 to the collector without clearing databases. Preserve the v66
+heartbeat and core-coverage checks, then validate that `option_trade_flow.db`
+grows, both public trade streams remain subscribed, no queue drops occur and the
+Dataset Exporter includes the optional database. Do not derive or promote a
+direction score from the new trades until an untouched multi-week archive proves
+positive futures expectancy after costs.

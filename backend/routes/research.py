@@ -10,6 +10,9 @@ from typing import Optional, List, Dict
 
 router = APIRouter(prefix="/api/research")
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'mos_research.db'))
+OPTION_FLOW_DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'data', 'option_trade_flow.db')
+)
 _dm = None
 
 
@@ -2003,6 +2006,84 @@ async def backfill_event_outcomes(
     finally:
         conn.close()
     return result
+
+
+@router.get("/option-trade-flow-status")
+def option_trade_flow_status():
+    """Read-only health and coverage summary for the standalone trade observer."""
+    from engine.version import ENGINE_PATCH_VERSION
+
+    if not os.path.exists(OPTION_FLOW_DB_PATH):
+        return {
+            "status": "not_started",
+            "engine_patch_version": ENGINE_PATCH_VERSION,
+            "database": OPTION_FLOW_DB_PATH,
+            "reason": "option_trade_flow_db_missing",
+            "trades": 0,
+            "exchanges": [],
+            "collector_status": [],
+        }
+    uri = f"file:{OPTION_FLOW_DB_PATH}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=10.0)
+    connection.row_factory = sqlite3.Row
+    try:
+        integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
+        trade_rows = connection.execute(
+            """
+            SELECT exchange,
+                   COUNT(*) AS trades,
+                   MIN(trade_timestamp_utc) AS first_trade_utc,
+                   MAX(trade_timestamp_utc) AS last_trade_utc,
+                   SUM(taker_side = 'BUY') AS taker_buys,
+                   SUM(taker_side = 'SELL') AS taker_sells,
+                   SUM(contract_id IS NOT NULL) AS normalized_contracts,
+                   SUM(trade_iv_decimal IS NOT NULL) AS valid_trade_iv,
+                   SUM(is_block_trade) AS block_trades,
+                   SUM(is_combo_trade) AS combo_trades
+            FROM option_trades
+            GROUP BY exchange
+            ORDER BY exchange
+            """
+        ).fetchall()
+        collector_rows = connection.execute(
+            "SELECT * FROM collector_status ORDER BY exchange"
+        ).fetchall()
+    finally:
+        connection.close()
+    now = time.time()
+    collectors = [dict(row) for row in collector_rows]
+    expected_collectors = {"bybit", "deribit"}
+    observed_collectors = {str(row["exchange"]) for row in collectors}
+    collector_current = observed_collectors == expected_collectors and all(
+        now - float(row["updated_at_utc"]) <= 15.0 for row in collectors
+    )
+    subscribed = observed_collectors == expected_collectors and all(
+        row["connection_state"] == "subscribed" for row in collectors
+    )
+    dropped = sum(int(row["dropped_trade_count"]) for row in collectors)
+    exchanges = []
+    for row in trade_rows:
+        item = dict(row)
+        item["last_trade_age_sec"] = (
+            round(now - float(item["last_trade_utc"]), 3)
+            if item["last_trade_utc"] is not None
+            else None
+        )
+        exchanges.append(item)
+    status = "ok" if integrity == "ok" and collector_current and subscribed and dropped == 0 else "degraded"
+    return {
+        "status": status,
+        "engine_patch_version": ENGINE_PATCH_VERSION,
+        "database": OPTION_FLOW_DB_PATH,
+        "quick_check": integrity,
+        "expected_collectors": sorted(expected_collectors),
+        "collector_status_fresh": collector_current,
+        "all_collectors_subscribed": subscribed,
+        "dropped_trades": dropped,
+        "trades": sum(int(row["trades"]) for row in exchanges),
+        "exchanges": exchanges,
+        "collector_status": collectors,
+    }
 
 
 @router.get("/event-outcomes")
