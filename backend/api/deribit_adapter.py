@@ -916,6 +916,13 @@ class DeribitAdapter(BaseExchangeAdapter):
             except Exception as exc:
                 log.debug("Deribit WS message error: %s", exc)
 
+            # Inbound market data must not postpone outbound keepalive.
+            # Some network paths silently expire a WebSocket that receives
+            # data but sends nothing, so check the fixed heartbeat clock
+            # after every successfully handled message as well as during
+            # receive timeouts.
+            await self._maintain_ws_transport(ws)
+
     async def _ws_subscription_refresh_loop(self, ws) -> None:
         """Discover new option instruments and subscribe without blocking reads."""
         self._ws_refresh_task_running = True

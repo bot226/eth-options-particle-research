@@ -120,7 +120,7 @@ Use `/api/research/option-trade-flow-status` for the same read-only runtime
 summary. A network gap that cannot be covered by the recent-trade backfill must
 be marked invalid during later research; never interpolate missing trades.
 
-For v67 Deribit collection, allow three to five minutes for initial core
+For v68 Deribit collection, allow three to five minutes for initial core
 warmup, then the non-blocking smoke test must report:
 
 ```text
@@ -199,6 +199,13 @@ the connection/reconnect and idle-reconnect counters, followed by fast REST
 recovery and a return to `healthy_low_rate`. A growing total cache with stale
 core coverage and neither heartbeat qualification nor reconnect is a liveness
 failure and invalidates that collection window.
+
+For v68 specifically, the fixed heartbeat must run during active market-data
+traffic: after five minutes `deribit_ws_heartbeat_success_count` must be greater
+than zero, `deribit_ws_heartbeat_error_count` must remain zero, and connection,
+reconnect, and idle-reconnect counters must remain stable through the 15- and
+30-minute checks. The option-trade Deribit connection and reconnect counters
+must likewise remain stable; incoming trades must not postpone its heartbeat.
 
 During an observed Deribit outage, the valid degraded contract is:
 

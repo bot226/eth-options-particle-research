@@ -586,16 +586,29 @@ class OptionTradeFlowCollector:
                         raise RuntimeError(f"subscription_not_confirmed:{acknowledgement}")
                     status["connection_state"] = "subscribed"
                     await self._backfill(exchange)
+                    heartbeat_deadline = (
+                        asyncio.get_running_loop().time()
+                        + DERIBIT_HEARTBEAT_INTERVAL_SECONDS
+                    )
                     while self.running:
+                        heartbeat_wait = max(
+                            0.0,
+                            heartbeat_deadline
+                            - asyncio.get_running_loop().time(),
+                        )
                         try:
                             message = await asyncio.wait_for(
                                 websocket.recv(),
-                                timeout=DERIBIT_HEARTBEAT_INTERVAL_SECONDS,
+                                timeout=heartbeat_wait,
                             )
                         except asyncio.TimeoutError:
                             await self._deribit_application_heartbeat(
                                 websocket,
                                 status,
+                            )
+                            heartbeat_deadline = (
+                                asyncio.get_running_loop().time()
+                                + DERIBIT_HEARTBEAT_INTERVAL_SECONDS
                             )
                             continue
                         self._handle_deribit_stream_payload(

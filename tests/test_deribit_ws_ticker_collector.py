@@ -59,6 +59,30 @@ class _HeartbeatSilentWebSocket(_SilentWebSocket):
         })
 
 
+class _BusyHeartbeatWebSocket(_HeartbeatSilentWebSocket):
+    def __init__(self, adapter, instrument_name):
+        super().__init__()
+        self.adapter = adapter
+        self.instrument_name = instrument_name
+        self.ticker_sent = False
+
+    async def recv(self):
+        if not self.ticker_sent:
+            self.ticker_sent = True
+            return json.dumps({
+                "method": "subscription",
+                "params": {
+                    "channel": f"incremental_ticker.{self.instrument_name}",
+                    "data": {
+                        "instrument_name": self.instrument_name,
+                        "mark_iv": 55.2,
+                    },
+                },
+            })
+        self.adapter._running = False
+        return await super().recv()
+
+
 class _InstrumentDiscoveryWebSocket:
     def __init__(self, instruments):
         self.instruments = instruments
@@ -1201,6 +1225,23 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.adapter._ws_heartbeat_success_count, 1)
         self.assertEqual(self.adapter._ws_idle_reconnect_count, 0)
         self.assertFalse(self.adapter._ws_soft_resubscribe_requested)
+
+    async def test_busy_ticker_stream_does_not_postpone_heartbeat(self):
+        instrument_name = "BTC-14AUG26-65000-C"
+        now = time.time()
+        self.adapter._running = True
+        self.adapter._ws_connection_started_ts = now - 21.0
+
+        websocket = _BusyHeartbeatWebSocket(
+            self.adapter,
+            instrument_name,
+        )
+        await self.adapter._ws_receive_loop(websocket)
+
+        self.assertEqual(self.adapter._ws_ticker_message_count, 1)
+        self.assertEqual(self.adapter._ws_heartbeat_attempt_count, 1)
+        self.assertEqual(self.adapter._ws_heartbeat_success_count, 1)
+        self.assertEqual(websocket.request["method"], "public/test")
 
     def test_recent_heartbeat_qualifies_quiet_transport_without_refreshing_data(self):
         instrument_name = "BTC-14AUG26-65000-C"

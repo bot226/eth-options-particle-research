@@ -5,7 +5,9 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
+import backend.workers.option_trade_flow_worker as flow_worker_module
 from backend.workers.option_trade_flow_worker import (
     OptionTradeFlowStore,
     OptionTradeFlowCollector,
@@ -31,6 +33,56 @@ class _DeribitApplicationHeartbeatWebSocket:
             "id": self.request["id"],
             "result": {"version": "1.2.26"},
         })
+
+
+class _ContinuousDeribitTradeWebSocket:
+    def __init__(self, collector):
+        self.collector = collector
+        self.last_request = None
+        self.subscription_ack_pending = False
+        self.heartbeat_requests = 0
+
+    async def send(self, message):
+        self.last_request = json.loads(message)
+        if self.last_request.get("method") == "public/subscribe":
+            self.subscription_ack_pending = True
+        elif self.last_request.get("method") == "public/test":
+            self.heartbeat_requests += 1
+
+    async def recv(self):
+        if self.subscription_ack_pending:
+            self.subscription_ack_pending = False
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": ["trades.option.BTC.100ms"],
+            })
+        if self.last_request.get("method") == "public/test":
+            self.collector.running = False
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "id": self.last_request["id"],
+                "result": {"version": "1.2.26"},
+            })
+        await asyncio.sleep(0.002)
+        return json.dumps({
+            "method": "subscription",
+            "params": {
+                "channel": "trades.option.BTC.100ms",
+                "data": [],
+            },
+        })
+
+
+class _AsyncWebSocketContext:
+    def __init__(self, websocket):
+        self.websocket = websocket
+
+    async def __aenter__(self):
+        return self.websocket
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
 
 
 class OptionTradeNormalizationTest(unittest.TestCase):
@@ -160,6 +212,39 @@ class OptionTradeFlowHeartbeatTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status["normalized_trade_count"], 1)
             self.assertEqual(status["queued_trade_count"], 1)
             self.assertEqual(collector.queue.qsize(), 1)
+
+    async def test_continuous_trades_do_not_postpone_heartbeat(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            collector = OptionTradeFlowCollector(
+                Path(temp_dir) / "option_trade_flow.db"
+            )
+            websocket = _ContinuousDeribitTradeWebSocket(collector)
+            collector.running = True
+
+            with (
+                patch.object(
+                    flow_worker_module,
+                    "DERIBIT_HEARTBEAT_INTERVAL_SECONDS",
+                    0.05,
+                ),
+                patch.object(
+                    flow_worker_module.websockets,
+                    "connect",
+                    return_value=_AsyncWebSocketContext(websocket),
+                ),
+                patch.object(
+                    collector,
+                    "_backfill",
+                    AsyncMock(),
+                ),
+            ):
+                await asyncio.wait_for(collector._deribit_loop(), timeout=1.0)
+
+            status = collector.statuses["deribit"]
+            self.assertGreaterEqual(status["message_count"], 1)
+            self.assertEqual(websocket.heartbeat_requests, 1)
+            self.assertEqual(status["connection_count"], 1)
+            self.assertEqual(status["reconnect_count"], 0)
 
 
 class OptionTradeFlowStoreTest(unittest.TestCase):

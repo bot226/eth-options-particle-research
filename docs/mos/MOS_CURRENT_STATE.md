@@ -5,7 +5,7 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_09_v67"
+CODE_VERSION = "research_fix_2026_08_10_v68"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
@@ -34,11 +34,11 @@ pass WebSocket data frames while dropping protocol Ping/Pong control frames.
 REST remains only the existing bounded cache-recovery path; no source, formula,
 threshold, database schema, candidate, or execution behavior changed.
 
-v67 sends the same JSON-RPC heartbeat after 20 seconds of socket silence,
-before the collector-host route reaches its approximately 60-second idle
-failure. It also replaces protocol Ping/Pong with `public/test` in the separate
-Deribit option-trade observer. Both collectors remain on direct Deribit
-WebSocket data; REST does not replace either live stream.
+v68 sends the same JSON-RPC heartbeat on a fixed 20-second outbound schedule,
+independent of incoming ticker or trade traffic. It also replaces protocol
+Ping/Pong with `public/test` in the separate Deribit option-trade observer. Both
+collectors remain on direct Deribit WebSocket data; REST does not replace either
+live stream.
 
 ## Particle Logic shadow v1
 
@@ -402,6 +402,25 @@ Research fix v67 therefore:
 - leaves direct Deribit subscriptions, raw data, REST recovery limits, formulas,
   thresholds, schemas, candidates, and execution unchanged.
 
+## Deribit traffic-independent keepalive v19
+
+Collector-host validation of v67 exposed 52 main-ticker reconnects and 12
+option-trade reconnects in about 40 minutes. All 52 JSON-RPC heartbeats were
+attempted only after the incoming stream had already become silent and all
+timed out. The implementation used a receive timeout as the heartbeat clock, so
+every incoming message postponed the outbound keepalive.
+
+Research fix v68 therefore:
+
+- checks the fixed 20-second outbound heartbeat deadline even while ticker
+  messages are continuously arriving;
+- gives the option-trade observer an absolute heartbeat deadline instead of a
+  receive-idle timeout, so trades cannot postpone `public/test`;
+- preserves all notifications received while waiting for the JSON-RPC reply;
+- reconnects only when the scheduled application heartbeat actually fails;
+- leaves sources, databases, formulas, thresholds, candidates, and execution
+  behavior unchanged.
+
 ## Public option trade-flow observer v68
 
 Research on the first six-day contract-level archive found no durable futures
@@ -553,7 +572,7 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v59/v67 to the collector without clearing databases. Preserve the v67
+Deploy v59/v68 to the collector without clearing databases. Preserve the v68
 heartbeat and core-coverage checks, then validate that `option_trade_flow.db`
 grows, both public trade streams remain subscribed, no queue drops occur and the
 Dataset Exporter includes the optional database. Do not derive or promote a
