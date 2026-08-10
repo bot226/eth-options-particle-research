@@ -1212,6 +1212,51 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.adapter._ws_ticker_message_count, 1)
         self.assertIn(instrument_name, self.adapter._ticker_cache_by_instrument)
 
+    async def test_deribit_server_heartbeat_ack_and_test_request(self):
+        websocket = _HeartbeatSilentWebSocket()
+
+        await self.adapter._enable_ws_server_heartbeat(websocket)
+        set_heartbeat_request = websocket.request
+        self.assertEqual(
+            set_heartbeat_request["method"],
+            "public/set_heartbeat",
+        )
+        self.assertEqual(set_heartbeat_request["params"]["interval"], 10.0)
+
+        await self.adapter._handle_ws_message({
+            "jsonrpc": "2.0",
+            "id": set_heartbeat_request["id"],
+            "result": "ok",
+        }, ws=websocket)
+        self.assertTrue(self.adapter._ws_server_heartbeat_enabled)
+
+        await self.adapter._handle_ws_message({
+            "jsonrpc": "2.0",
+            "method": "heartbeat",
+            "params": {"type": "test_request"},
+        }, ws=websocket)
+        test_request = websocket.request
+        self.assertEqual(test_request["method"], "public/test")
+        self.assertEqual(
+            self.adapter._ws_server_heartbeat_message_count,
+            1,
+        )
+        self.assertEqual(
+            self.adapter._ws_server_heartbeat_test_request_count,
+            1,
+        )
+
+        await self.adapter._handle_ws_message({
+            "jsonrpc": "2.0",
+            "id": test_request["id"],
+            "result": {"version": "1.2.26"},
+        }, ws=websocket)
+        self.assertEqual(self.adapter._ws_heartbeat_success_count, 1)
+        self.assertEqual(
+            len(self.adapter._ws_server_heartbeat_pending_tests),
+            0,
+        )
+
     async def test_json_rpc_heartbeat_runs_before_ticker_idle_timeout(self):
         now = time.time()
         self.adapter._ws_connection_started_ts = now - 21.0

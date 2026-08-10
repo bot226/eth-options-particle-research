@@ -40,8 +40,9 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "option_trade_f
 QUEUE_MAXSIZE = 50_000
 WRITE_BATCH_SIZE = 1_000
 STATUS_FLUSH_SECONDS = 5.0
-DERIBIT_HEARTBEAT_INTERVAL_SECONDS = 20.0
+DERIBIT_HEARTBEAT_INTERVAL_SECONDS = 10.0
 DERIBIT_HEARTBEAT_TIMEOUT_SECONDS = 10.0
+DERIBIT_HEARTBEAT_MAX_SILENCE_SECONDS = 30.0
 BACKFILL_MIN_INTERVAL_SECONDS = 300.0
 BYBIT_OPTION_TRADE_TOPIC = "publicTrade.BTC"
 
@@ -434,6 +435,11 @@ class OptionTradeFlowCollector:
                 "last_message_utc": 0.0,
                 "last_trade_utc": 0.0,
                 "last_error": "",
+                "server_heartbeat_enabled": False,
+                "server_heartbeat_message_count": 0,
+                "server_heartbeat_test_request_count": 0,
+                "server_heartbeat_last_message_utc": 0.0,
+                "server_heartbeat_pending_tests": {},
             }
             for exchange in ("bybit", "deribit")
         }
@@ -585,33 +591,26 @@ class OptionTradeFlowCollector:
                     if "trades.option.BTC.100ms" not in channels:
                         raise RuntimeError(f"subscription_not_confirmed:{acknowledgement}")
                     status["connection_state"] = "subscribed"
-                    await self._backfill(exchange)
-                    heartbeat_deadline = (
-                        asyncio.get_running_loop().time()
-                        + DERIBIT_HEARTBEAT_INTERVAL_SECONDS
+                    await self._enable_deribit_server_heartbeat(
+                        websocket,
+                        status,
                     )
+                    # REST backfill is independent evidence recovery and must
+                    # not block heartbeat/test_request processing on the live
+                    # WebSocket.
+                    asyncio.create_task(self._backfill(exchange))
                     while self.running:
-                        heartbeat_wait = max(
-                            0.0,
-                            heartbeat_deadline
-                            - asyncio.get_running_loop().time(),
-                        )
                         try:
                             message = await asyncio.wait_for(
                                 websocket.recv(),
-                                timeout=heartbeat_wait,
+                                timeout=DERIBIT_HEARTBEAT_MAX_SILENCE_SECONDS,
                             )
                         except asyncio.TimeoutError:
-                            await self._deribit_application_heartbeat(
-                                websocket,
-                                status,
+                            raise RuntimeError(
+                                "deribit_server_heartbeat_timeout"
                             )
-                            heartbeat_deadline = (
-                                asyncio.get_running_loop().time()
-                                + DERIBIT_HEARTBEAT_INTERVAL_SECONDS
-                            )
-                            continue
-                        self._handle_deribit_stream_payload(
+                        await self._handle_deribit_ws_payload(
+                            websocket,
                             status,
                             json.loads(message),
                         )
@@ -636,6 +635,85 @@ class OptionTradeFlowCollector:
         status["last_message_utc"] = time.time()
         for raw in params.get("data", []):
             self._enqueue("deribit", normalize_deribit_trade(raw))
+
+    async def _enable_deribit_server_heartbeat(
+        self,
+        websocket,
+        status: dict[str, Any],
+    ) -> None:
+        """Enable and verify Deribit's documented server heartbeat."""
+        self.deribit_heartbeat_request_id += 1
+        request_id = self.deribit_heartbeat_request_id
+        await websocket.send(json.dumps({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "public/set_heartbeat",
+            "params": {"interval": DERIBIT_HEARTBEAT_INTERVAL_SECONDS},
+        }))
+        deadline = asyncio.get_running_loop().time() + (
+            DERIBIT_HEARTBEAT_TIMEOUT_SECONDS
+        )
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            payload = json.loads(await asyncio.wait_for(
+                websocket.recv(),
+                timeout=remaining,
+            ))
+            if payload.get("id") == request_id:
+                if payload.get("error") or payload.get("result") != "ok":
+                    raise RuntimeError(
+                        f"set_heartbeat_error:{payload.get('error') or payload}"
+                    )
+                status["server_heartbeat_enabled"] = True
+                return
+            await self._handle_deribit_ws_payload(
+                websocket,
+                status,
+                payload,
+            )
+
+    async def _handle_deribit_ws_payload(
+        self,
+        websocket,
+        status: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> None:
+        """Handle trades plus Deribit's server heartbeat notifications."""
+        pending_tests = status["server_heartbeat_pending_tests"]
+        request_id = payload.get("id")
+        if request_id in pending_tests:
+            pending_tests.pop(request_id, None)
+            if payload.get("error") or "result" not in payload:
+                raise RuntimeError(
+                    f"heartbeat_rpc_error:{payload.get('error') or payload}"
+                )
+            return
+
+        if pending_tests and (
+            time.perf_counter() - min(pending_tests.values())
+            > DERIBIT_HEARTBEAT_TIMEOUT_SECONDS
+        ):
+            raise RuntimeError("deribit_server_test_response_timeout")
+
+        if payload.get("method") == "heartbeat":
+            status["server_heartbeat_message_count"] += 1
+            status["server_heartbeat_last_message_utc"] = time.time()
+            if payload.get("params", {}).get("type") == "test_request":
+                status["server_heartbeat_test_request_count"] += 1
+                self.deribit_heartbeat_request_id += 1
+                heartbeat_id = self.deribit_heartbeat_request_id
+                pending_tests[heartbeat_id] = time.perf_counter()
+                await websocket.send(json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": heartbeat_id,
+                    "method": "public/test",
+                    "params": {},
+                }))
+            return
+
+        self._handle_deribit_stream_payload(status, payload)
 
     async def _deribit_application_heartbeat(
         self,

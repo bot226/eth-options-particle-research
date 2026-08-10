@@ -40,12 +40,16 @@ class _ContinuousDeribitTradeWebSocket:
         self.collector = collector
         self.last_request = None
         self.subscription_ack_pending = False
+        self.set_heartbeat_ack_pending = False
         self.heartbeat_requests = 0
+        self.market_message_count = 0
 
     async def send(self, message):
         self.last_request = json.loads(message)
         if self.last_request.get("method") == "public/subscribe":
             self.subscription_ack_pending = True
+        elif self.last_request.get("method") == "public/set_heartbeat":
+            self.set_heartbeat_ack_pending = True
         elif self.last_request.get("method") == "public/test":
             self.heartbeat_requests += 1
 
@@ -57,6 +61,13 @@ class _ContinuousDeribitTradeWebSocket:
                 "id": 1,
                 "result": ["trades.option.BTC.100ms"],
             })
+        if self.set_heartbeat_ack_pending:
+            self.set_heartbeat_ack_pending = False
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "id": self.last_request["id"],
+                "result": "ok",
+            })
         if self.last_request.get("method") == "public/test":
             self.collector.running = False
             return json.dumps({
@@ -65,6 +76,19 @@ class _ContinuousDeribitTradeWebSocket:
                 "result": {"version": "1.2.26"},
             })
         await asyncio.sleep(0.002)
+        self.market_message_count += 1
+        if self.market_message_count == 4:
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "method": "heartbeat",
+                "params": {"type": "heartbeat"},
+            })
+        if self.market_message_count >= 5:
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "method": "heartbeat",
+                "params": {"type": "test_request"},
+            })
         return json.dumps({
             "method": "subscription",
             "params": {
@@ -223,11 +247,6 @@ class OptionTradeFlowHeartbeatTest(unittest.IsolatedAsyncioTestCase):
 
             with (
                 patch.object(
-                    flow_worker_module,
-                    "DERIBIT_HEARTBEAT_INTERVAL_SECONDS",
-                    0.05,
-                ),
-                patch.object(
                     flow_worker_module.websockets,
                     "connect",
                     return_value=_AsyncWebSocketContext(websocket),
@@ -245,6 +264,12 @@ class OptionTradeFlowHeartbeatTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(websocket.heartbeat_requests, 1)
             self.assertEqual(status["connection_count"], 1)
             self.assertEqual(status["reconnect_count"], 0)
+            self.assertTrue(status["server_heartbeat_enabled"])
+            self.assertEqual(status["server_heartbeat_message_count"], 2)
+            self.assertEqual(
+                status["server_heartbeat_test_request_count"],
+                1,
+            )
 
 
 class OptionTradeFlowStoreTest(unittest.TestCase):

@@ -120,7 +120,7 @@ Use `/api/research/option-trade-flow-status` for the same read-only runtime
 summary. A network gap that cannot be covered by the recent-trade backfill must
 be marked invalid during later research; never interpolate missing trades.
 
-For v68 Deribit collection, allow three to five minutes for initial core
+For v69 Deribit collection, allow three to five minutes for initial core
 warmup, then the non-blocking smoke test must report:
 
 ```text
@@ -172,8 +172,12 @@ deribit_ws_ticker_idle_timeout_sec = 60
 deribit_ws_liveness_state = ticker_active, stream_quiet_heartbeat_alive,
     or soft_resubscribe_waiting
 deribit_ws_heartbeat_timeout_sec = 10
-deribit_ws_heartbeat_transport = json_rpc_public_test
-deribit_ws_heartbeat_interval_sec = 20
+deribit_ws_heartbeat_transport = deribit_server_set_heartbeat+json_rpc_public_test
+deribit_ws_heartbeat_interval_sec = 10
+deribit_ws_server_heartbeat_enabled = true
+deribit_ws_server_heartbeat_message_count > 0
+deribit_ws_server_heartbeat_last_message_ts > 0
+deribit_ws_server_heartbeat_pending_test_count = 0
 deribit_ws_heartbeat_recheck_sec = 30
 deribit_ws_soft_resubscribe_cooldown_sec = 300
 deribit_ws_soft_resubscribe_grace_sec = 90
@@ -200,12 +204,13 @@ recovery and a return to `healthy_low_rate`. A growing total cache with stale
 core coverage and neither heartbeat qualification nor reconnect is a liveness
 failure and invalidates that collection window.
 
-For v68 specifically, the fixed heartbeat must run during active market-data
-traffic: after five minutes `deribit_ws_heartbeat_success_count` must be greater
-than zero, `deribit_ws_heartbeat_error_count` must remain zero, and connection,
-reconnect, and idle-reconnect counters must remain stable through the 15- and
-30-minute checks. The option-trade Deribit connection and reconnect counters
-must likewise remain stable; incoming trades must not postpone its heartbeat.
+For v69 specifically, Deribit's server heartbeat must remain enabled during
+active market-data traffic. After five minutes the server heartbeat message
+count must be greater than zero, its last-message timestamp must remain recent,
+the pending-test count must return to zero, and the heartbeat error count must
+remain zero. Connection, reconnect, and idle-reconnect counters must remain
+stable through the 15- and 30-minute checks. The option-trade Deribit connection
+and reconnect counters must likewise remain stable.
 
 During an observed Deribit outage, the valid degraded contract is:
 

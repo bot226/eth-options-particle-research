@@ -47,6 +47,8 @@ _WS_RECEIVE_POLL_SEC = 5.0
 _WS_HEARTBEAT_INTERVAL_SEC = 20.0
 _WS_HEARTBEAT_TIMEOUT_SEC = 10.0
 _WS_HEARTBEAT_RECHECK_SEC = 30.0
+_WS_SERVER_HEARTBEAT_INTERVAL_SEC = 10.0
+_WS_SERVER_HEARTBEAT_MAX_SILENCE_SEC = 30.0
 _WS_SOFT_RESUBSCRIBE_COOLDOWN_SEC = 5 * 60.0
 _WS_SOFT_RESUBSCRIBE_GRACE_SEC = 90.0
 _WS_SPOT_CACHE_MAX_AGE_SEC = 60.0
@@ -137,6 +139,13 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_heartbeat_last_success_ts: float = 0.0
         self._ws_heartbeat_last_rtt_ms: float = 0.0
         self._ws_heartbeat_last_error: str = ""
+        self._ws_server_heartbeat_request_id: Optional[int] = None
+        self._ws_server_heartbeat_enabled: bool = False
+        self._ws_server_heartbeat_ack_ts: float = 0.0
+        self._ws_server_heartbeat_message_count: int = 0
+        self._ws_server_heartbeat_test_request_count: int = 0
+        self._ws_server_heartbeat_last_message_ts: float = 0.0
+        self._ws_server_heartbeat_pending_tests: dict[int, float] = {}
         self._ws_soft_resubscribe_requested: bool = False
         self._ws_soft_resubscribe_in_progress: bool = False
         self._ws_soft_resubscribe_requested_ts: float = 0.0
@@ -698,6 +707,11 @@ class DeribitAdapter(BaseExchangeAdapter):
                     self._ws_ticker_watch_started_ts = 0.0
                     self._ws_heartbeat_last_attempt_ts = 0.0
                     self._ws_heartbeat_last_success_ts = 0.0
+                    self._ws_server_heartbeat_request_id = None
+                    self._ws_server_heartbeat_enabled = False
+                    self._ws_server_heartbeat_ack_ts = 0.0
+                    self._ws_server_heartbeat_last_message_ts = 0.0
+                    self._ws_server_heartbeat_pending_tests.clear()
                     self._ws_soft_resubscribe_requested = False
                     self._ws_soft_resubscribe_in_progress = False
                     self._ws_soft_resubscribe_requested_ts = 0.0
@@ -712,6 +726,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                     self._ws_subscription_retry_event.clear()
                     log.info("Deribit WS connected")
 
+                    await self._enable_ws_server_heartbeat(ws)
                     await self._ws_subscribe(ws, [
                         "deribit_price_index.btc_usd",
                     ])
@@ -806,7 +821,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                             f"heartbeat_rpc_error:{msg.get('error') or msg}"
                         )
                     break
-                await self._handle_ws_message(msg)
+                await self._handle_ws_message(msg, ws=ws)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -823,6 +838,17 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_heartbeat_last_error = ""
         return True
 
+    async def _enable_ws_server_heartbeat(self, ws) -> None:
+        """Enable Deribit's documented WebSocket heartbeat protocol."""
+        request_id = self._next_id()
+        self._ws_server_heartbeat_request_id = request_id
+        await ws.send(json.dumps({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "public/set_heartbeat",
+            "params": {"interval": _WS_SERVER_HEARTBEAT_INTERVAL_SEC},
+        }))
+
     def _is_ws_heartbeat_due(self, now: Optional[float] = None) -> bool:
         """Keep the JSON WebSocket path active before network idle expiry."""
         current_ts = time.time() if now is None else now
@@ -837,6 +863,37 @@ class DeribitAdapter(BaseExchangeAdapter):
 
     async def _maintain_ws_transport(self, ws) -> None:
         """Send a low-rate application heartbeat before the route goes idle."""
+        if self._ws_server_heartbeat_enabled:
+            if self._ws_server_heartbeat_pending_tests:
+                oldest_test_started = min(
+                    self._ws_server_heartbeat_pending_tests.values()
+                )
+                if (
+                    time.perf_counter() - oldest_test_started
+                    > _WS_HEARTBEAT_TIMEOUT_SEC
+                ):
+                    self._ws_heartbeat_error_count += 1
+                    self._ws_heartbeat_last_error = (
+                        "server_test_response_timeout"
+                    )
+                    self._ws_idle_reconnect_count += 1
+                    self._ws_last_idle_reconnect_ts = time.time()
+                    raise RuntimeError(
+                        "deribit_ws_server_test_response_timeout"
+                    )
+            reference_ts = max(
+                self._ws_server_heartbeat_ack_ts,
+                self._ws_server_heartbeat_last_message_ts,
+            )
+            if (
+                reference_ts > 0
+                and time.time() - reference_ts
+                <= _WS_SERVER_HEARTBEAT_MAX_SILENCE_SEC
+            ):
+                return
+            self._ws_idle_reconnect_count += 1
+            self._ws_last_idle_reconnect_ts = time.time()
+            raise RuntimeError("deribit_ws_server_heartbeat_timeout")
         if not self._is_ws_heartbeat_due():
             return
         if await self._ws_protocol_heartbeat(ws):
@@ -880,14 +937,26 @@ class DeribitAdapter(BaseExchangeAdapter):
             )
 
         heartbeat_is_recent = bool(
-            self._ws_heartbeat_last_success_ts > 0
-            and now - self._ws_heartbeat_last_success_ts
-            <= _WS_HEARTBEAT_RECHECK_SEC
+            (
+                self._ws_server_heartbeat_last_message_ts > 0
+                and now - self._ws_server_heartbeat_last_message_ts
+                <= _WS_SERVER_HEARTBEAT_MAX_SILENCE_SEC
+            )
+            or (
+                self._ws_heartbeat_last_success_ts > 0
+                and now - self._ws_heartbeat_last_success_ts
+                <= _WS_HEARTBEAT_RECHECK_SEC
+            )
         )
-        if not heartbeat_is_recent and not await self._ws_protocol_heartbeat(ws):
-            self._ws_idle_reconnect_count += 1
-            self._ws_last_idle_reconnect_ts = time.time()
-            raise RuntimeError("deribit_ws_heartbeat_timeout")
+        if not heartbeat_is_recent:
+            if self._ws_server_heartbeat_enabled:
+                self._ws_idle_reconnect_count += 1
+                self._ws_last_idle_reconnect_ts = time.time()
+                raise RuntimeError("deribit_ws_server_heartbeat_timeout")
+            if not await self._ws_protocol_heartbeat(ws):
+                self._ws_idle_reconnect_count += 1
+                self._ws_last_idle_reconnect_ts = time.time()
+                raise RuntimeError("deribit_ws_heartbeat_timeout")
 
         resubscribe_age = now - self._ws_soft_resubscribe_requested_ts
         if (
@@ -912,7 +981,7 @@ class DeribitAdapter(BaseExchangeAdapter):
 
             try:
                 msg = json.loads(message)
-                await self._handle_ws_message(msg)
+                await self._handle_ws_message(msg, ws=ws)
             except Exception as exc:
                 log.debug("Deribit WS message error: %s", exc)
 
@@ -1580,9 +1649,67 @@ class DeribitAdapter(BaseExchangeAdapter):
         self.health.update(latency_ms=latency_ms, ws_connected=True)
         return True
 
-    async def _handle_ws_message(self, msg: dict):
+    async def _handle_ws_message(self, msg: dict, ws=None):
         """Handle incoming WS message (JSON-RPC notification)."""
         request_id = msg.get("id")
+
+        if (
+            request_id is not None
+            and request_id == self._ws_server_heartbeat_request_id
+        ):
+            self._ws_server_heartbeat_request_id = None
+            if msg.get("error") or msg.get("result") != "ok":
+                self._ws_heartbeat_error_count += 1
+                self._ws_heartbeat_last_error = (
+                    f"set_heartbeat_error:{msg.get('error') or msg}"
+                )
+                return
+            self._ws_server_heartbeat_enabled = True
+            self._ws_server_heartbeat_ack_ts = time.time()
+            self._ws_heartbeat_last_error = ""
+            return
+
+        pending_test_started = self._ws_server_heartbeat_pending_tests.pop(
+            request_id,
+            None,
+        )
+        if pending_test_started is not None:
+            if msg.get("error") or "result" not in msg:
+                self._ws_heartbeat_error_count += 1
+                self._ws_heartbeat_last_error = (
+                    f"heartbeat_rpc_error:{msg.get('error') or msg}"
+                )
+                return
+            self._ws_heartbeat_success_count += 1
+            self._ws_heartbeat_last_success_ts = time.time()
+            self._ws_heartbeat_last_rtt_ms = (
+                time.perf_counter() - pending_test_started
+            ) * 1000.0
+            self._ws_heartbeat_last_error = ""
+            return
+
+        method = msg.get("method")
+        if method == "heartbeat":
+            now = time.time()
+            self._ws_server_heartbeat_message_count += 1
+            self._ws_server_heartbeat_last_message_ts = now
+            heartbeat_type = str(msg.get("params", {}).get("type", ""))
+            if heartbeat_type == "test_request" and ws is not None:
+                self._ws_server_heartbeat_test_request_count += 1
+                self._ws_heartbeat_attempt_count += 1
+                self._ws_heartbeat_last_attempt_ts = now
+                heartbeat_id = self._next_id()
+                self._ws_server_heartbeat_pending_tests[heartbeat_id] = (
+                    time.perf_counter()
+                )
+                await ws.send(json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": heartbeat_id,
+                    "method": "public/test",
+                    "params": {},
+                }))
+            return
+
         pending_channels = self._pending_ticker_channels.pop(
             request_id, set()
         )
@@ -1624,7 +1751,6 @@ class DeribitAdapter(BaseExchangeAdapter):
             return
 
         # Deribit WS sends notifications with method="subscription"
-        method = msg.get("method")
         if method != "subscription":
             return
 
@@ -1866,15 +1992,46 @@ class DeribitAdapter(BaseExchangeAdapter):
                 else "soft_resubscribe_waiting"
                 if self._ws_soft_resubscribe_in_progress
                 else "stream_quiet_heartbeat_alive"
-                if self._ws_heartbeat_last_success_ts > 0
-                and now - self._ws_heartbeat_last_success_ts
-                <= _WS_HEARTBEAT_RECHECK_SEC
+                if (
+                    self._ws_server_heartbeat_last_message_ts > 0
+                    and now - self._ws_server_heartbeat_last_message_ts
+                    <= _WS_SERVER_HEARTBEAT_MAX_SILENCE_SEC
+                ) or (
+                    self._ws_heartbeat_last_success_ts > 0
+                    and now - self._ws_heartbeat_last_success_ts
+                    <= _WS_HEARTBEAT_RECHECK_SEC
+                )
                 else "stream_quiet_unqualified"
             ),
             "deribit_ws_heartbeat_timeout_sec": _WS_HEARTBEAT_TIMEOUT_SEC,
-            "deribit_ws_heartbeat_transport": "json_rpc_public_test",
-            "deribit_ws_heartbeat_interval_sec": _WS_HEARTBEAT_INTERVAL_SEC,
+            "deribit_ws_heartbeat_transport": (
+                "deribit_server_set_heartbeat+json_rpc_public_test"
+            ),
+            "deribit_ws_heartbeat_interval_sec": (
+                _WS_SERVER_HEARTBEAT_INTERVAL_SEC
+            ),
+            "deribit_ws_heartbeat_fallback_interval_sec": (
+                _WS_HEARTBEAT_INTERVAL_SEC
+            ),
             "deribit_ws_heartbeat_recheck_sec": _WS_HEARTBEAT_RECHECK_SEC,
+            "deribit_ws_server_heartbeat_enabled": (
+                self._ws_server_heartbeat_enabled
+            ),
+            "deribit_ws_server_heartbeat_max_silence_sec": (
+                _WS_SERVER_HEARTBEAT_MAX_SILENCE_SEC
+            ),
+            "deribit_ws_server_heartbeat_message_count": (
+                self._ws_server_heartbeat_message_count
+            ),
+            "deribit_ws_server_heartbeat_test_request_count": (
+                self._ws_server_heartbeat_test_request_count
+            ),
+            "deribit_ws_server_heartbeat_last_message_ts": (
+                self._ws_server_heartbeat_last_message_ts
+            ),
+            "deribit_ws_server_heartbeat_pending_test_count": len(
+                self._ws_server_heartbeat_pending_tests
+            ),
             "deribit_ws_heartbeat_attempt_count": (
                 self._ws_heartbeat_attempt_count
             ),
