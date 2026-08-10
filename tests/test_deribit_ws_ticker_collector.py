@@ -1288,6 +1288,36 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.adapter._ws_heartbeat_success_count, 1)
         self.assertEqual(websocket.request["method"], "public/test")
 
+    async def test_active_ticker_traffic_qualifies_server_heartbeat_route(self):
+        now = time.time()
+        self.adapter._ws_server_heartbeat_enabled = True
+        self.adapter._ws_server_heartbeat_ack_ts = now - 31.0
+        self.adapter._ws_server_heartbeat_last_message_ts = 0.0
+        self.adapter._ws_last_message_ts = now
+
+        await self.adapter._maintain_ws_transport(
+            _HeartbeatSilentWebSocket()
+        )
+
+        self.assertEqual(self.adapter._ws_idle_reconnect_count, 0)
+
+    async def test_fully_silent_server_heartbeat_route_reconnects(self):
+        now = time.time()
+        self.adapter._ws_server_heartbeat_enabled = True
+        self.adapter._ws_server_heartbeat_ack_ts = now - 31.0
+        self.adapter._ws_server_heartbeat_last_message_ts = 0.0
+        self.adapter._ws_last_message_ts = now - 31.0
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "deribit_ws_server_heartbeat_timeout",
+        ):
+            await self.adapter._maintain_ws_transport(
+                _HeartbeatSilentWebSocket()
+            )
+
+        self.assertEqual(self.adapter._ws_idle_reconnect_count, 1)
+
     def test_recent_heartbeat_qualifies_quiet_transport_without_refreshing_data(self):
         instrument_name = "BTC-14AUG26-65000-C"
         channel = f"incremental_ticker.{instrument_name}"

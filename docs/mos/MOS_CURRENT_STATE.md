@@ -5,7 +5,7 @@
 Current development branch version:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_10_v69"
+CODE_VERSION = "research_fix_2026_08_10_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
 ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
@@ -34,10 +34,10 @@ pass WebSocket data frames while dropping protocol Ping/Pong control frames.
 REST remains only the existing bounded cache-recovery path; no source, formula,
 threshold, database schema, candidate, or execution behavior changed.
 
-v69 enables Deribit's official `public/set_heartbeat` protocol at ten seconds
-on both direct WebSocket connections. The collectors process server heartbeat
-notifications and answer every `test_request` with `public/test`. REST does not
-replace either live stream.
+v70 enables Deribit's official `public/set_heartbeat` protocol at ten seconds
+on both direct WebSocket connections, while treating any real ticker, trade, or
+control message as transport liveness. The collectors answer every
+`test_request` with `public/test`. REST does not replace either live stream.
 
 ## Particle Logic shadow v1
 
@@ -441,6 +441,28 @@ protocol instead of sending unsolicited liveness probes:
 - leaves raw sources, REST recovery, databases, formulas, thresholds,
   candidates, and execution unchanged.
 
+## Deribit any-frame liveness and non-blocking setup v21
+
+The first v69 collector run proved that `set_heartbeat` was accepted and a
+`test_request` round trip succeeded in 52.5 ms, but the main adapter still
+reconnected 56 times in about 42 minutes. It incorrectly required a dedicated
+server heartbeat every 30 seconds even while thousands of real ticker frames
+were arriving. The trade observer separately waited synchronously for the
+`set_heartbeat` acknowledgement and entered a roughly ten-second reconnect
+loop when that reply was delayed.
+
+Research fix v70 therefore:
+
+- treats every received WebSocket frame as route liveness, including ticker,
+  trade, subscription, heartbeat, and JSON-RPC response frames;
+- reconnects only after 30 seconds with no WebSocket frame at all or after an
+  unanswered server `test_request`;
+- sends trade-stream `set_heartbeat` without blocking the live receive loop;
+- preserves the latest Deribit disconnect reason across a successful reconnect
+  so diagnostics cannot erase the cause before it is inspected;
+- leaves raw sources, REST recovery, databases, formulas, thresholds,
+  candidates, and execution unchanged.
+
 ## Public option trade-flow observer v68
 
 Research on the first six-day contract-level archive found no durable futures
@@ -592,7 +614,7 @@ Execution mostly remains WAIT. This is acceptable on calm markets, but must be c
 
 ## Next recommended step
 
-Deploy v59/v69 to the collector without clearing databases. Preserve the v69
+Deploy v59/v70 to the collector without clearing databases. Preserve the v70
 heartbeat and core-coverage checks, then validate that `option_trade_flow.db`
 grows, both public trade streams remain subscribed, no queue drops occur and the
 Dataset Exporter includes the optional database. Do not derive or promote a

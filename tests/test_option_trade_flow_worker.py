@@ -244,6 +244,9 @@ class OptionTradeFlowHeartbeatTest(unittest.IsolatedAsyncioTestCase):
             )
             websocket = _ContinuousDeribitTradeWebSocket(collector)
             collector.running = True
+            collector.statuses["deribit"]["last_error"] = (
+                "previous_disconnect_reason"
+            )
 
             with (
                 patch.object(
@@ -264,6 +267,10 @@ class OptionTradeFlowHeartbeatTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(websocket.heartbeat_requests, 1)
             self.assertEqual(status["connection_count"], 1)
             self.assertEqual(status["reconnect_count"], 0)
+            self.assertEqual(
+                status["last_error"],
+                "previous_disconnect_reason",
+            )
             self.assertTrue(status["server_heartbeat_enabled"])
             self.assertEqual(status["server_heartbeat_message_count"], 2)
             self.assertEqual(

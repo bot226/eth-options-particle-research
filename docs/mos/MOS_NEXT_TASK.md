@@ -6,7 +6,7 @@
 
 Prove that raw public BTC option trades are collected continuously and exported
 without changing MOS formulas, databases, candidates or execution. Preserve all
-v69 Deribit heartbeat, freshness, circuit-breaker and core-coverage behavior.
+v70 Deribit heartbeat, freshness, circuit-breaker and core-coverage behavior.
 Prove that quality evidence remains available across at least one controlled
 observer restart.
 
@@ -40,7 +40,7 @@ to see how many complete dual-exchange research days have accumulated. A
 non-ready result is expected before the frozen minimum is reached and does not
 require changing thresholds.
 
-Start v59/v69 without clearing any database. After two to five minutes call:
+Start v59/v70 without clearing any database. After two to five minutes call:
 
 ```text
 GET /api/research/option-trade-flow-status
@@ -81,7 +81,7 @@ launcher once. Confirm that current `session_id` changes, the prior history rows
 remain present, both exchanges acquire new history rows, and the endpoint reports
 two sessions in the applicable quality window. A restart is not a queue drop.
 
-Also repeat the existing v69 Deribit smoke check. Core coverage must remain at
+Also repeat the existing v70 Deribit smoke check. Core coverage must remain at
 least 70%; the new observer must not increase the main adapter REST counters or
 break heartbeat-qualified liveness.
 
@@ -113,8 +113,8 @@ must have `integrity_check = ok`, `quick_check = ok` and a SHA-256 hash.
 - canonical option identity and IV are populated for valid option trades;
 - reconnect/backfill overlap remains idempotent;
 - existing three MOS database schemas are unchanged;
-- standard diagnostics retain v59/v69 versions;
-- v69 Deribit core coverage and liveness remain valid;
+- standard diagnostics retain v59/v70 versions;
+- v70 Deribit core coverage and liveness remain valid;
 - Dataset Exporter includes and verifies the optional flow database;
 - all existing and new unit tests pass;
 - no clean database is required.

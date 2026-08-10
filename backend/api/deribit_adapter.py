@@ -129,6 +129,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._ws_ticker_watch_started_ts: float = 0.0
         self._ws_last_idle_reconnect_ts: float = 0.0
         self._ws_connection_started_ts: float = 0.0
+        self._ws_last_message_ts: float = 0.0
         self._ws_connection_count: int = 0
         self._ws_reconnect_count: int = 0
         self._ws_idle_reconnect_count: int = 0
@@ -704,6 +705,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                     self.health.ws_connected = True
                     self._ws_connection_count += 1
                     self._ws_connection_started_ts = time.time()
+                    self._ws_last_message_ts = self._ws_connection_started_ts
                     self._ws_ticker_watch_started_ts = 0.0
                     self._ws_heartbeat_last_attempt_ts = 0.0
                     self._ws_heartbeat_last_success_ts = 0.0
@@ -814,6 +816,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                 if remaining <= 0:
                     raise asyncio.TimeoutError
                 message = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                self._ws_last_message_ts = time.time()
                 msg = json.loads(message)
                 if msg.get("id") == request_id:
                     if msg.get("error") or "result" not in msg:
@@ -862,7 +865,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         )
 
     async def _maintain_ws_transport(self, ws) -> None:
-        """Send a low-rate application heartbeat before the route goes idle."""
+        """Qualify any live WS traffic before declaring the route idle."""
         if self._ws_server_heartbeat_enabled:
             if self._ws_server_heartbeat_pending_tests:
                 oldest_test_started = min(
@@ -884,6 +887,7 @@ class DeribitAdapter(BaseExchangeAdapter):
             reference_ts = max(
                 self._ws_server_heartbeat_ack_ts,
                 self._ws_server_heartbeat_last_message_ts,
+                self._ws_last_message_ts,
             )
             if (
                 reference_ts > 0
@@ -981,6 +985,7 @@ class DeribitAdapter(BaseExchangeAdapter):
 
             try:
                 msg = json.loads(message)
+                self._ws_last_message_ts = time.time()
                 await self._handle_ws_message(msg, ws=ws)
             except Exception as exc:
                 log.debug("Deribit WS message error: %s", exc)
@@ -1986,6 +1991,7 @@ class DeribitAdapter(BaseExchangeAdapter):
             "deribit_ws_connection_count": self._ws_connection_count,
             "deribit_ws_reconnect_count": self._ws_reconnect_count,
             "deribit_ws_idle_reconnect_count": self._ws_idle_reconnect_count,
+            "deribit_ws_last_message_ts": self._ws_last_message_ts,
             "deribit_ws_liveness_state": (
                 "ticker_active"
                 if not self._is_ws_ticker_stream_idle(now=now)

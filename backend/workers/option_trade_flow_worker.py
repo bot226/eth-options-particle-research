@@ -439,6 +439,7 @@ class OptionTradeFlowCollector:
                 "server_heartbeat_message_count": 0,
                 "server_heartbeat_test_request_count": 0,
                 "server_heartbeat_last_message_utc": 0.0,
+                "server_heartbeat_request_id": None,
                 "server_heartbeat_pending_tests": {},
             }
             for exchange in ("bybit", "deribit")
@@ -506,7 +507,6 @@ class OptionTradeFlowCollector:
                     attempt = 0
                     status["connection_count"] += 1
                     status["connection_state"] = "subscribing"
-                    status["last_error"] = ""
                     await websocket.send(
                         json.dumps({"op": "subscribe", "args": [BYBIT_OPTION_TRADE_TOPIC]})
                     )
@@ -571,7 +571,6 @@ class OptionTradeFlowCollector:
                     attempt = 0
                     status["connection_count"] += 1
                     status["connection_state"] = "subscribing"
-                    status["last_error"] = ""
                     await websocket.send(
                         json.dumps(
                             {
@@ -591,7 +590,7 @@ class OptionTradeFlowCollector:
                     if "trades.option.BTC.100ms" not in channels:
                         raise RuntimeError(f"subscription_not_confirmed:{acknowledgement}")
                     status["connection_state"] = "subscribed"
-                    await self._enable_deribit_server_heartbeat(
+                    await self._request_deribit_server_heartbeat(
                         websocket,
                         status,
                     )
@@ -636,43 +635,23 @@ class OptionTradeFlowCollector:
         for raw in params.get("data", []):
             self._enqueue("deribit", normalize_deribit_trade(raw))
 
-    async def _enable_deribit_server_heartbeat(
+    async def _request_deribit_server_heartbeat(
         self,
         websocket,
         status: dict[str, Any],
     ) -> None:
-        """Enable and verify Deribit's documented server heartbeat."""
+        """Request Deribit's heartbeat without blocking live stream reads."""
         self.deribit_heartbeat_request_id += 1
         request_id = self.deribit_heartbeat_request_id
+        status["server_heartbeat_enabled"] = False
+        status["server_heartbeat_request_id"] = request_id
+        status["server_heartbeat_pending_tests"].clear()
         await websocket.send(json.dumps({
             "jsonrpc": "2.0",
             "id": request_id,
             "method": "public/set_heartbeat",
             "params": {"interval": DERIBIT_HEARTBEAT_INTERVAL_SECONDS},
         }))
-        deadline = asyncio.get_running_loop().time() + (
-            DERIBIT_HEARTBEAT_TIMEOUT_SECONDS
-        )
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise asyncio.TimeoutError
-            payload = json.loads(await asyncio.wait_for(
-                websocket.recv(),
-                timeout=remaining,
-            ))
-            if payload.get("id") == request_id:
-                if payload.get("error") or payload.get("result") != "ok":
-                    raise RuntimeError(
-                        f"set_heartbeat_error:{payload.get('error') or payload}"
-                    )
-                status["server_heartbeat_enabled"] = True
-                return
-            await self._handle_deribit_ws_payload(
-                websocket,
-                status,
-                payload,
-            )
 
     async def _handle_deribit_ws_payload(
         self,
@@ -683,6 +662,17 @@ class OptionTradeFlowCollector:
         """Handle trades plus Deribit's server heartbeat notifications."""
         pending_tests = status["server_heartbeat_pending_tests"]
         request_id = payload.get("id")
+        if (
+            request_id is not None
+            and request_id == status["server_heartbeat_request_id"]
+        ):
+            status["server_heartbeat_request_id"] = None
+            if payload.get("error") or payload.get("result") != "ok":
+                raise RuntimeError(
+                    f"set_heartbeat_error:{payload.get('error') or payload}"
+                )
+            status["server_heartbeat_enabled"] = True
+            return
         if request_id in pending_tests:
             pending_tests.pop(request_id, None)
             if payload.get("error") or "result" not in payload:
