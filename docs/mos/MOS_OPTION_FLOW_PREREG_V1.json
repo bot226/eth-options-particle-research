@@ -1,7 +1,7 @@
 {
   "protocol": "mos_option_flow_preregister_v1",
   "frozen_at_utc": "2026-08-09T00:00:00Z",
-  "purpose": "Out-of-sample test of public BTC option trade flow for BTCUSDT futures direction and movement magnitude",
+  "purpose": "Out-of-sample test of public ETH option trade flow for ETHUSDT futures direction and movement magnitude",
   "decision_interval_sec": 300,
   "lookbacks_sec": [300, 900, 1800],
   "horizons_sec": [900, 1800, 3600],

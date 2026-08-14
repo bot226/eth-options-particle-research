@@ -157,7 +157,7 @@ class FeatureConstructionTest(unittest.TestCase):
             "exchange": "bybit",
             "trade_id": "trade",
             "timestamp_utc": 100.0,
-            "contract_id": "BTC-20260925-70000-C",
+            "contract_id": "ETH-20260925-70000-C",
             "expiry": "20260925",
             "strike": 70000.0,
             "option_type": "C",
@@ -181,7 +181,7 @@ class FeatureConstructionTest(unittest.TestCase):
         put_buy = self._trade(
             trade_id="put",
             option_type="P",
-            contract_id="BTC-20260925-70000-P",
+            contract_id="ETH-20260925-70000-P",
             size=1.0,
             delta=-0.4,
         )
@@ -319,7 +319,7 @@ class EarlierGreekJoinTest(unittest.TestCase):
             )
             flow.execute(
                 "INSERT INTO option_trades VALUES "
-                "('bybit','t1',1000,'BTC-20260925-70000-C','20260925',70000,'C',"
+                "('bybit','t1',1000,'ETH-20260925-70000-C','20260925',70000,'C',"
                 "'BUY',1,1,0.5,0,0)"
             )
             flow.commit()
@@ -338,8 +338,8 @@ class EarlierGreekJoinTest(unittest.TestCase):
             history.executemany(
                 "INSERT INTO option_contract_snapshots VALUES (?,?,?,?,?,?,?,?)",
                 [
-                    ("bybit", "BTC-20260925-70000-C", 900, 0.4, 0.01, 2, 0.49, 70000),
-                    ("bybit", "BTC-20260925-70000-C", 1010, 0.9, 0.09, 9, 0.80, 80000),
+                    ("bybit", "ETH-20260925-70000-C", 900, 0.4, 0.01, 2, 0.49, 70000),
+                    ("bybit", "ETH-20260925-70000-C", 1010, 0.9, 0.09, 9, 0.80, 80000),
                 ],
             )
             history.execute(
@@ -584,7 +584,7 @@ class EndToEndDatasetTest(unittest.TestCase):
                     normalize_bybit_trade(
                         {
                             "T": timestamp_ms,
-                            "s": "BTC-25SEP26-70000-C-USDT",
+                            "s": "ETH-25SEP26-70000-C-USDT",
                             "S": side,
                             "v": "2",
                             "p": "0.02",
@@ -597,7 +597,7 @@ class EndToEndDatasetTest(unittest.TestCase):
                     normalize_deribit_trade(
                         {
                             "timestamp": timestamp_ms,
-                            "instrument_name": "BTC-25SEP26-70000-C",
+                            "instrument_name": "ETH-25SEP26-70000-C",
                             "direction": side.lower(),
                             "amount": 2,
                             "price": 0.02,
@@ -667,7 +667,7 @@ class EndToEndDatasetTest(unittest.TestCase):
                             (
                                 decision - 50,
                                 exchange,
-                                "BTC-20260925-70000-C",
+                                "ETH-20260925-70000-C",
                                 0.5,
                                 0.01,
                                 2.0,
@@ -712,7 +712,7 @@ class EndToEndDatasetTest(unittest.TestCase):
                 for timestamp in range(first, last + 1, 60):
                     price = 70000.0 + ((timestamp - first) // 60) * 0.5
                     candle_rows.append(
-                        (timestamp, "BTCUSDT", "1m", price + 5, price - 5, price)
+                        (timestamp, "ETHUSDT", "1m", price + 5, price - 5, price)
                     )
                 connection.executemany(
                     "INSERT INTO ohlcv_candles VALUES (?,?,?,?,?,?)", candle_rows

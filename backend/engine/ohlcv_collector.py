@@ -1,15 +1,15 @@
 """OHLCV collector for MOS Research Layer replay validation.
 
-v2: Bybit linear BTCUSDT 1m candles (execution instrument).
+v2: Bybit linear ETHUSDT 1m candles (execution instrument).
 Previously used Binance spot as proxy — replaced with the actual
 execution exchange to ensure MFE/MAE/SL/TP replay uses the correct OHLCV.
 
 Rules:
 - exchange  = "bybit"
 - market_type = "linear"
-- symbol    = "BTCUSDT"
+- symbol    = "ETHUSDT"
 - timeframe = "1m"
-- ohlcv_source = "bybit_linear_btcusdt"
+- ohlcv_source = "bybit_linear_ethusdt"
 - candle_source_verified = 1
 
 If Bybit fetch fails:
@@ -38,9 +38,9 @@ log = logging.getLogger(__name__)
 OHLCV_ENABLED        = True
 OHLCV_EXCHANGE       = "bybit"
 OHLCV_MARKET_TYPE    = "linear"
-OHLCV_SYMBOL         = "BTCUSDT"
+OHLCV_SYMBOL         = "ETHUSDT"
 OHLCV_TIMEFRAME      = "1m"
-OHLCV_SOURCE_LABEL   = "bybit_linear_btcusdt"
+OHLCV_SOURCE_LABEL   = "bybit_linear_ethusdt"
 OHLCV_POLL_INTERVAL_SEC = 12
 
 BYBIT_KLINES_URL = "https://api.bybit.com/v5/market/kline"
@@ -100,7 +100,7 @@ def ensure_ohlcv_schema(db_path: str = DB_PATH):
 
 
 class OhlcvCollector:
-    """Async Bybit linear BTCUSDT 1m OHLCV collector with SQLite UPSERT.
+    """Async Bybit linear ETHUSDT 1m OHLCV collector with SQLite UPSERT.
 
     Switched from Binance spot (proxy) to Bybit linear (execution instrument)
     so that MFE/MAE/replay outcome uses the actual futures candles.
@@ -180,7 +180,7 @@ class OhlcvCollector:
             await asyncio.sleep(self.poll_interval_sec)
 
     async def collect_once(self):
-        """Fetch Bybit linear BTCUSDT 1m candles and upsert into ohlcv_candles."""
+        """Fetch Bybit linear ETHUSDT 1m candles and upsert into ohlcv_candles."""
         if not self._client:
             self._client = httpx.AsyncClient(timeout=10.0)
 
@@ -333,7 +333,7 @@ class OhlcvCollector:
             "ohlcv_source_type":      "execution",
             "ohlcv_source_label":     self.ohlcv_source,
             "ohlcv_note": (
-                "v2: Bybit linear BTCUSDT 1m used as execution OHLCV. "
+                "v2: Bybit linear ETHUSDT 1m used as execution OHLCV. "
                 "MFE/MAE/SL/TP replay uses futures candles, not spot proxy."
             ),
         }

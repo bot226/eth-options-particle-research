@@ -1,9 +1,9 @@
 """Price Source Engine — MOS Manual v1.2.
 
 Provides explicit separation between:
-  - reference_price : BTC index price (preferred: Bybit index endpoint;
-                      fallback: median underlyingPrice across valid BTC option tickers)
-  - execution_price : Bybit linear BTCUSDT (actual futures/perp for trading)
+  - reference_price : ETH index price (preferred: Bybit index endpoint;
+                      fallback: median underlyingPrice across valid ETH option tickers)
+  - execution_price : Bybit linear ETHUSDT (actual futures/perp for trading)
   - basis           : execution_price - reference_price
   - basis_pct       : basis / reference_price * 100
 
@@ -37,9 +37,9 @@ log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 EXECUTION_VENUE   = "bybit_linear"
-EXECUTION_SYMBOL  = "BTCUSDT"
+EXECUTION_SYMBOL  = "ETHUSDT"
 REFERENCE_VENUE   = "bybit_options_index"
-REFERENCE_SYMBOL  = "BTCUSD_INDEX"   # underlyingPrice from Bybit options tickers
+REFERENCE_SYMBOL  = "ETHUSD_INDEX"   # underlyingPrice from Bybit options tickers
 
 # Sources used for different MOS Manual purposes
 PRICE_SOURCE_FOR_ENTRY   = "execution_price"
@@ -49,8 +49,8 @@ PRICE_SOURCE_FOR_OUTCOME = "execution_ohlcv"
 _CACHE_TTL_SEC = 5.0   # seconds before re-computing
 
 # If |candidate - execution| / execution > this → mark as SUSPECT
-# 0.5% is a reasonable BTC index-to-perp deviation threshold.
-# The real BTC perp-to-index basis is ±0.2% on normal days.
+# 0.5% is a reasonable ETH index-to-perp deviation threshold.
+# The real ETH perp-to-index basis is ±0.2% on normal days.
 SANITY_PCT_THRESHOLD = 0.005   # 0.5%
 
 # Minimum number of valid candidates required to trust median
@@ -64,8 +64,8 @@ class PriceSourceInfo:
     """Immutable snapshot of price source data for MOS Manual."""
 
     # Core prices
-    reference_price: Optional[float] = None    # BTC index (median of valid tickers)
-    execution_price: Optional[float] = None    # BTCUSDT linear perp
+    reference_price: Optional[float] = None    # ETH index (median of valid tickers)
+    execution_price: Optional[float] = None    # ETHUSDT linear perp
 
     # Basis
     basis: Optional[float] = None              # execution - reference
@@ -83,10 +83,10 @@ class PriceSourceInfo:
     price_source_for_outcome: str = PRICE_SOURCE_FOR_OUTCOME
 
     # OHLCV source transparency
-    ohlcv_source: str = "bybit_linear_btcusdt"
+    ohlcv_source: str = "bybit_linear_ethusdt"
     ohlcv_exchange: str = "bybit"
     ohlcv_market_type: str = "linear"
-    ohlcv_symbol: str = "BTCUSDT"
+    ohlcv_symbol: str = "ETHUSDT"
     ohlcv_timeframe: str = "1m"
     candle_source_verified: int = 0
 
@@ -162,7 +162,7 @@ class PriceSourceEngine:
         Parameters
         ----------
         dm : DataManager or MultiExchangeDataManager
-            The live data manager. Must have .spot_price (BTCUSDT linear perp).
+            The live data manager. Must have .spot_price (ETHUSDT linear perp).
             May have .tickers (Bybit options) with underlyingPrice.
         """
         global _cache, _cache_ts
@@ -179,7 +179,7 @@ class PriceSourceEngine:
     def _compute(dm: Any) -> PriceSourceInfo:
         """Actually compute PriceSourceInfo from DataManager state."""
 
-        # ── 1. execution_price: BTCUSDT linear perp ──────────────────────────
+        # ── 1. execution_price: ETHUSDT linear perp ──────────────────────────
         execution_price: Optional[float] = None
         execution_from  = "unavailable"
 

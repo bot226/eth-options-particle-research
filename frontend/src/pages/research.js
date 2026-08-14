@@ -52,7 +52,7 @@ export class ResearchPage {
         </div>
         <div class="research-charts-wrap">
           <div class="research-chart-block">
-            <div class="research-chart-label">SPOT PRICE & EVENTS (BTC/USDT)</div>
+            <div class="research-chart-label">SPOT PRICE & EVENTS (ETH/USDT)</div>
             <div id="chart-spot" class="research-chart"></div>
           </div>
           <div class="research-chart-block">
@@ -330,7 +330,7 @@ export class ResearchPage {
     this.spotSeries = this.chartSpot.addSeries(LineSeries, {
       color: '#2962FF',
       lineWidth: 2,
-      title: 'BTC Spot',
+      title: 'ETH Spot',
     });
 
     this.chartIntel = createChart(elIntel, chartOptions);

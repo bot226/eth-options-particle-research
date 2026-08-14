@@ -12,6 +12,14 @@ build/
 *.log
 node_modules/
 frontend/dist/
+.runtime/
+
+# Copied research artifacts are never shared between BTC and ETH.
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.csv
+!data/.gitkeep
 
 # Database files (regenerated at runtime)
 backend/data/*.db

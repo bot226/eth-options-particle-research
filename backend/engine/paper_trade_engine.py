@@ -385,8 +385,8 @@ class PaperTradeEngine:
                 SELECT timestamp_utc, open, high, low, close 
                 FROM ohlcv_candles
                 WHERE exchange = 'bybit' AND market_type = 'linear' 
-                  AND symbol = 'BTCUSDT' AND timeframe = '1m'
-                  AND ohlcv_source = 'bybit_linear_btcusdt'
+                  AND symbol = 'ETHUSDT' AND timeframe = '1m'
+                  AND ohlcv_source = 'bybit_linear_ethusdt'
                   AND candle_source_verified = 1
                   AND timestamp_utc >= ?
                 ORDER BY timestamp_utc ASC
@@ -398,9 +398,9 @@ class PaperTradeEngine:
                     "timestamp_utc": float(row["timestamp_utc"]),
                     "exchange": "bybit",
                     "market_type": "linear",
-                    "symbol": "BTCUSDT",
+                    "symbol": "ETHUSDT",
                     "timeframe": "1m",
-                    "ohlcv_source": "bybit_linear_btcusdt",
+                    "ohlcv_source": "bybit_linear_ethusdt",
                     "candle_source_verified": 1,
                     "open": float(row["open"]),
                     "high": float(row["high"]),
@@ -427,9 +427,9 @@ class PaperTradeEngine:
         for c in candles:
             if (c.get("exchange") == "bybit" and
                 c.get("market_type") == "linear" and
-                c.get("symbol") == "BTCUSDT" and
+                c.get("symbol") == "ETHUSDT" and
                 c.get("timeframe") == "1m" and
-                c.get("ohlcv_source") == "bybit_linear_btcusdt" and
+                c.get("ohlcv_source") == "bybit_linear_ethusdt" and
                 str(c.get("candle_source_verified", 0)) == "1"):
                 valid_candles.append(c)
         
@@ -511,7 +511,7 @@ class PaperTradeEngine:
                             trade["result_r"] = (entry - close) / risk
 
                         trade["last_update_candle_ts"] = ts
-                        trade["last_update_source"] = "bybit_linear_btcusdt"
+                        trade["last_update_source"] = "bybit_linear_ethusdt"
 
                         # Exit logic
                         is_stop = False

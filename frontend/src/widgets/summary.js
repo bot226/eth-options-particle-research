@@ -21,7 +21,7 @@ export function renderSummary(container, summary, spot, change) {
   else if (pcRatio > 1.2) { bias = 'BEARISH'; biasClass = 'red'; }
 
   const metrics = [
-    { label: 'BTC Price', value: spot ? '$' + fmtK(spot) : '—', cls: '' },
+    { label: 'ETH Price', value: spot ? '$' + fmtK(spot) : '—', cls: '' },
     { label: '24H Change', value: change ? (change * 100).toFixed(2) + '%' : '—', cls: change >= 0 ? 'green' : 'red' },
     { label: 'Total OI', value: fmtK(totalOi), cls: '' },
     { label: 'Calls OI', value: fmtK(callOi), cls: 'green' },

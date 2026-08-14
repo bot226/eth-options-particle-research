@@ -7,7 +7,7 @@ def main():
     # Replace _updateDecisionCard body lines
     old_card_fields = '''        <div class="mt-dm-row">
           <span class="mt-dm-label">nearest_level</span>
-          <span class="mt-dm-val">${liveNearest ? this._fmtBTC(liveNearest) : '—'} ${ctxBadge}</span>
+          <span class="mt-dm-val">${liveNearest ? this._fmtETH(liveNearest) : '—'} ${ctxBadge}</span>
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">level_result</span>
@@ -16,19 +16,19 @@ def main():
 
     new_card_fields = '''        <div class="mt-dm-row">
           <span class="mt-dm-label">support</span>
-          <span class="mt-dm-val">${liveCtx.live_support_level ? this._fmtBTC(liveCtx.live_support_level) + ' Δ' + liveCtx.live_support_distance_pct.toFixed(2) + '%' : '—'} <span style="color:var(--text-dim);font-size:8px">(${this._esc(liveCtx.live_support_source || '')})</span></span>
+          <span class="mt-dm-val">${liveCtx.live_support_level ? this._fmtETH(liveCtx.live_support_level) + ' Δ' + liveCtx.live_support_distance_pct.toFixed(2) + '%' : '—'} <span style="color:var(--text-dim);font-size:8px">(${this._esc(liveCtx.live_support_source || '')})</span></span>
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">resistance</span>
-          <span class="mt-dm-val">${liveCtx.live_resistance_level ? this._fmtBTC(liveCtx.live_resistance_level) + ' Δ' + liveCtx.live_resistance_distance_pct.toFixed(2) + '%' : '—'} <span style="color:var(--text-dim);font-size:8px">(${this._esc(liveCtx.live_resistance_source || '')})</span></span>
+          <span class="mt-dm-val">${liveCtx.live_resistance_level ? this._fmtETH(liveCtx.live_resistance_level) + ' Δ' + liveCtx.live_resistance_distance_pct.toFixed(2) + '%' : '—'} <span style="color:var(--text-dim);font-size:8px">(${this._esc(liveCtx.live_resistance_source || '')})</span></span>
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">primary_live</span>
-          <span class="mt-dm-val">${liveCtx.primary_live_level ? this._esc(liveCtx.primary_live_side) + ' ' + this._fmtBTC(liveCtx.primary_live_level) + ' Δ' + liveCtx.primary_live_distance_pct.toFixed(2) + '%' : '—'}</span>
+          <span class="mt-dm-val">${liveCtx.primary_live_level ? this._esc(liveCtx.primary_live_side) + ' ' + this._fmtETH(liveCtx.primary_live_level) + ' Δ' + liveCtx.primary_live_distance_pct.toFixed(2) + '%' : '—'}</span>
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">selected_for_setup</span>
-          <span class="mt-dm-val">${manual.selected_setup_level ? this._esc(manual.selected_setup_side) + ' ' + this._fmtBTC(manual.selected_setup_level) : '—'}</span>
+          <span class="mt-dm-val">${manual.selected_setup_level ? this._esc(manual.selected_setup_side) + ' ' + this._fmtETH(manual.selected_setup_level) : '—'}</span>
         </div>'''
 
     content = content.replace(old_card_fields, new_card_fields)

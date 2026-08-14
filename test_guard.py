@@ -2,7 +2,7 @@ import sqlite3
 import os
 from datetime import datetime
 
-db_path = "c:\\Users\\User\\Desktop\\Project\\btc-gpt-codex-v11-targeted-fix\\backend\\data\\mos_research.db"
+db_path = "c:\\Users\\User\\Desktop\\Project\\eth-gpt-codex-v11-targeted-fix\\backend\\data\\mos_research.db"
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 

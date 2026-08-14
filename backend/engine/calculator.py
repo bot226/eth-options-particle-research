@@ -182,7 +182,7 @@ class Calculator:
     def get_gamma_exposure_full(chain: dict, spot: float) -> dict:
         """Institutional GEX: агрегация по ВСЕМ expiries с DTE-weighting.
 
-        Crypto-native формула (1 contract = 1 BTC):
+        Crypto-native формула (1 contract = 1 ETH):
             GEX = gamma × OI × contract_size × spot
         Call GEX положительный, Put GEX отрицательный (market maker perspective).
 

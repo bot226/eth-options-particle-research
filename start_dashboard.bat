@@ -1,7 +1,10 @@
 @echo off
-title BTC Options Trading Workstation
+title ETH Options Trading Workstation
+set "MOS_BACKEND_HOST=127.0.0.1"
+if not defined MOS_BACKEND_PORT set "MOS_BACKEND_PORT=8101"
+if not defined MOS_FRONTEND_PORT set "MOS_FRONTEND_PORT=5174"
 echo =================================================================
-echo     BTC OPTIONS TRADING WORKSTATION - AUTOLAUNCHER (WINDOWS)
+echo     ETH OPTIONS TRADING WORKSTATION - AUTOLAUNCHER (WINDOWS)
 echo =================================================================
 echo.
 

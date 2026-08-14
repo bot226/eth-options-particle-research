@@ -1,5 +1,5 @@
 /**
- * ManualChart — read-only 1m BTC price chart for MOS Manual Trading tab.
+ * ManualChart — read-only 1m ETH price chart for MOS Manual Trading tab.
  * lightweight-charts v5 (addSeries API).
  *
  * Layers:

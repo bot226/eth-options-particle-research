@@ -125,7 +125,7 @@ class BaseExchangeAdapter(ABC):
 
     @abstractmethod
     async def fetch_instruments(self) -> list[dict]:
-        """Fetch list of all active BTC option instruments.
+        """Fetch list of all active ETH option instruments.
 
         Returns:
             List of raw instrument dicts in exchange-native format.
@@ -133,7 +133,7 @@ class BaseExchangeAdapter(ABC):
 
     @abstractmethod
     async def fetch_option_tickers(self) -> list[dict]:
-        """Fetch current tickers for all BTC options.
+        """Fetch current tickers for all ETH options.
 
         Must include: OI, IV, Greeks, prices, volume.
 
@@ -143,7 +143,7 @@ class BaseExchangeAdapter(ABC):
 
     @abstractmethod
     async def fetch_spot_price(self) -> Optional[float]:
-        """Fetch current BTC spot/index price from this exchange.
+        """Fetch current ETH spot/index price from this exchange.
 
         Returns:
             Spot price as float, or None if unavailable.

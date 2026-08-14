@@ -1,5 +1,5 @@
 /**
- * BTC Options Dashboard — Main Entry Point (Modular SPA Version).
+ * ETH Options Dashboard — Main Entry Point (Modular SPA Version).
  * Инициализирует глобальный store, роутер и динамически обновляет страницы.
  */
 import './style.css';

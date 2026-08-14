@@ -255,7 +255,7 @@ export function renderGex(histCanvasId, curveCanvasId, data, spot) {
         },
         scales: {
           x: {
-            title: { display: true, text: 'Net GEX (BTC)', color: '#7a7a9e', font: { family: 'JetBrains Mono', size: 9 } },
+            title: { display: true, text: 'Net GEX (ETH)', color: '#7a7a9e', font: { family: 'JetBrains Mono', size: 9 } },
             ticks: { color: '#7a7a9e', font: { family: 'JetBrains Mono', size: 8 } },
             grid: { color: 'rgba(40,40,80,0.25)' }
           },

@@ -1,6 +1,6 @@
 """v6 Acceptance — covers all 7 fixes."""
 import sqlite3, os
-DB = r"c:\Users\User\Desktop\Project\btc-dashboard\backend\data\mos_research.db"
+DB = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "mos_research.db"))
 
 conn = sqlite3.connect(DB, timeout=30)
 c = conn.cursor()

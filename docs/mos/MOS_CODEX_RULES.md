@@ -78,9 +78,9 @@ Update only:
 Current development branch:
 
 ```python
-CODE_VERSION = "research_fix_2026_08_10_v70"
+CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
+ENGINE_PATCH_VERSION = "v1_eth_asset_runtime_isolation"
 ```
 
 Do not create duplicate version files.

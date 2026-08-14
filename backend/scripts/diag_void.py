@@ -3,7 +3,7 @@ import urllib.request, json
 
 # Get current market state with debug info
 try:
-    r = urllib.request.urlopen('http://localhost:8005/api/state', timeout=5)
+    r = urllib.request.urlopen('http://localhost:8101/api/state', timeout=5)
     state = json.loads(r.read())
     spot = state.get("spot_price", 0)
     ai = state.get("advanced_intelligence", {})
@@ -22,7 +22,7 @@ try:
     
     # Show void debug breakdown
     try:
-        r2 = urllib.request.urlopen('http://localhost:8005/api/debug/liquidity-void', timeout=5)
+        r2 = urllib.request.urlopen('http://localhost:8101/api/debug/liquidity-void', timeout=5)
         debug = json.loads(r2.read())
         print(f"\nVoid debug breakdown:")
         print(json.dumps(debug, indent=2))

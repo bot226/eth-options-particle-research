@@ -353,7 +353,7 @@ class MultiExchangeDataManager:
 
     async def _update_spot_price(self):
         """Update spot price from primary source (Bybit, then Deribit)."""
-        # Priority: Bybit (has BTCUSDT linear), then Deribit (BTC index)
+        # Priority: Bybit (has ETHUSDT linear), then Deribit (ETH index)
         for ex_id in ["bybit", "deribit"]:
             adapter = self.adapters.get(ex_id)
             if adapter is None:

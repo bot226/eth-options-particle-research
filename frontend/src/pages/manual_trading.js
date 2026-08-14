@@ -195,7 +195,7 @@ export class ManualTradingPage {
             <!-- Chart panel — LW Charts mounts here -->
             <div class="mt-chart-panel">
               <div class="mt-chart-header">
-                <span>BTC 1M · PRICE + SETUP</span>
+                <span>ETH 1M · PRICE + SETUP</span>
                 <span id="mt-chart-stale-ind" style="margin-left:12px; font-size:9px; color:var(--text-dim);"></span>
                 <button id="mt-chart-refresh" class="mt-btn-sm" style="margin-left:auto; font-size:9px; padding:2px 8px; cursor:pointer; background:transparent; border:1px solid #303040; color:#8890a8; border-radius:3px; text-transform:uppercase;">Refresh Chart</button>
                 <button id="mt-chart-reset" class="mt-btn-sm" style="margin-left:8px; margin-right:12px; font-size:9px; padding:2px 8px; cursor:pointer; background:transparent; border:1px solid #303040; color:#8890a8; border-radius:3px; text-transform:uppercase;">Reset View</button>
@@ -453,7 +453,7 @@ export class ManualTradingPage {
       || state.data?.spot
       || null;
     const el = document.getElementById('mt-chart-price');
-    if (el) el.textContent = execPrice ? this._fmtBTC(execPrice) : '—';
+    if (el) el.textContent = execPrice ? this._fmtETH(execPrice) : '—';
 
     // Keep latest klines; push to chart when mounted (include watchlist markers)
     if (Array.isArray(state.klines) && state.klines.length) {
@@ -828,7 +828,7 @@ export class ManualTradingPage {
       rawLevelRow = `
         <div class="mt-dm-row mt-dm-stale-row" title="replay/outcome table only, not used for live decisions">
           <span class="mt-dm-label">raw_replay</span>
-          <span class="mt-dm-val">${this._esc(rawResult)}${rawLevel ? ' @ ' + this._fmtBTC(rawLevel) : ''} <span style="color:var(--text-dim);font-size:7px">(${ageLabel})</span></span>
+          <span class="mt-dm-val">${this._esc(rawResult)}${rawLevel ? ' @ ' + this._fmtETH(rawLevel) : ''} <span style="color:var(--text-dim);font-size:7px">(${ageLabel})</span></span>
         </div>`;
     }
 
@@ -868,23 +868,23 @@ export class ManualTradingPage {
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">support</span>
-          <span class="mt-dm-val">${safeNumber(liveCtx.live_support_level) !== null ? this._fmtBTC(liveCtx.live_support_level) + ' Δ' + (safeNumber(liveCtx.live_support_distance_pct) || 0).toFixed(2) + '%' : '—'} <span style="color:var(--text-dim);font-size:8px">(${this._esc(liveCtx.live_support_source || '')})</span></span>
+          <span class="mt-dm-val">${safeNumber(liveCtx.live_support_level) !== null ? this._fmtETH(liveCtx.live_support_level) + ' Δ' + (safeNumber(liveCtx.live_support_distance_pct) || 0).toFixed(2) + '%' : '—'} <span style="color:var(--text-dim);font-size:8px">(${this._esc(liveCtx.live_support_source || '')})</span></span>
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">resistance</span>
-          <span class="mt-dm-val">${safeNumber(liveCtx.live_resistance_level) !== null ? this._fmtBTC(liveCtx.live_resistance_level) + ' Δ' + (safeNumber(liveCtx.live_resistance_distance_pct) || 0).toFixed(2) + '%' : '—'} <span style="color:var(--text-dim);font-size:8px">(${this._esc(liveCtx.live_resistance_source || '')})</span></span>
+          <span class="mt-dm-val">${safeNumber(liveCtx.live_resistance_level) !== null ? this._fmtETH(liveCtx.live_resistance_level) + ' Δ' + (safeNumber(liveCtx.live_resistance_distance_pct) || 0).toFixed(2) + '%' : '—'} <span style="color:var(--text-dim);font-size:8px">(${this._esc(liveCtx.live_resistance_source || '')})</span></span>
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">primary_live</span>
-          <span class="mt-dm-val">${safeNumber(liveCtx.primary_live_level) !== null ? this._esc(liveCtx.primary_live_side) + ' ' + this._fmtBTC(liveCtx.primary_live_level) + ' Δ' + (safeNumber(liveCtx.primary_live_distance_pct) || 0).toFixed(2) + '%' : '—'}</span>
+          <span class="mt-dm-val">${safeNumber(liveCtx.primary_live_level) !== null ? this._esc(liveCtx.primary_live_side) + ' ' + this._fmtETH(liveCtx.primary_live_level) + ' Δ' + (safeNumber(liveCtx.primary_live_distance_pct) || 0).toFixed(2) + '%' : '—'}</span>
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">selected_for_setup</span>
-          <span class="mt-dm-val">${safeNumber(manual.selected_setup_level) !== null ? this._esc(manual.selected_setup_side) + ' ' + this._fmtBTC(manual.selected_setup_level) : '—'}</span>
+          <span class="mt-dm-val">${safeNumber(manual.selected_setup_level) !== null ? this._esc(manual.selected_setup_side) + ' ' + this._fmtETH(manual.selected_setup_level) : '—'}</span>
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">invalidation_level</span>
-          <span class="mt-dm-val">${this._fmtBTC(manual.invalidation_level)}</span>
+          <span class="mt-dm-val">${this._fmtETH(manual.invalidation_level)}</span>
         </div>
         ${rawLevelRow}
       </div>
@@ -894,12 +894,12 @@ export class ManualTradingPage {
         <div class="mt-psb-title">PRICE SOURCE</div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">Ref price</span>
-          <span class="mt-dm-val" style="color:var(--text-dim)">${psi?.reference_price != null ? this._fmtBTC(psi.reference_price) : (manual.reference_price != null ? this._fmtBTC(manual.reference_price) : '—')}
+          <span class="mt-dm-val" style="color:var(--text-dim)">${psi?.reference_price != null ? this._fmtETH(psi.reference_price) : (manual.reference_price != null ? this._fmtETH(manual.reference_price) : '—')}
             <span style="font-size:8px;color:var(--text-dim)"> (index)</span></span>
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">Exec price</span>
-          <span class="mt-dm-val" style="color:var(--yellow,#f0b429);font-weight:600">${psi?.execution_price != null ? this._fmtBTC(psi.execution_price) : (manual.execution_price != null ? this._fmtBTC(manual.execution_price) : '—')}
+          <span class="mt-dm-val" style="color:var(--yellow,#f0b429);font-weight:600">${psi?.execution_price != null ? this._fmtETH(psi.execution_price) : (manual.execution_price != null ? this._fmtETH(manual.execution_price) : '—')}
             <span style="font-size:8px;color:var(--text-dim)"> (${this._esc((psi?.execution_symbol || manual.execution_symbol) ?? 'perp')})</span></span>
         </div>
         <div class="mt-dm-row">
@@ -916,7 +916,7 @@ export class ManualTradingPage {
         </div>
         <div class="mt-dm-row">
           <span class="mt-dm-label">OHLCV src</span>
-          <span class="mt-dm-val" style="color:var(--text-dim);font-size:9px">${this._esc((psi?.ohlcv_source || manual.ohlcv_source) ?? 'binance_spot_btcusdt')}</span>
+          <span class="mt-dm-val" style="color:var(--text-dim);font-size:9px">${this._esc((psi?.ohlcv_source || manual.ohlcv_source) ?? 'binance_spot_ethusdt')}</span>
         </div>
       </div>
 
@@ -991,7 +991,7 @@ export class ManualTradingPage {
       {
         label: 'Nearest Level',
         icon: nearLevel ? ok : fail,
-        val: nearLevel ? this._fmtBTC(nearLevel) : '<span class="mt-ld-missing">missing</span>',
+        val: nearLevel ? this._fmtETH(nearLevel) : '<span class="mt-ld-missing">missing</span>',
       },
       {
         label: 'Flow',
@@ -1057,7 +1057,7 @@ export class ManualTradingPage {
     this._setText('mt-rb-exec-sub',  `bias: ${manual.manual_bias || '—'}`);
     this._setText('mt-rb-flow',      flow);
     this._setText('mt-rb-flow-sub',  `confidence: ${manual.manual_confidence || '—'}`);
-    this._setText('mt-rb-level',     level !== null ? this._fmtBTC(level) : '—');
+    this._setText('mt-rb-level',     level !== null ? this._fmtETH(level) : '—');
     this._setText('mt-rb-level-sub', `reaction: ${result}`);
 
     this._colorRibbon('mt-ribbon-state', state);
@@ -1239,15 +1239,15 @@ export class ManualTradingPage {
         <td><span class="mt-pill mt-bc-${this._biasCls(row.manual_bias)}">${this._esc(row.manual_bias || '—')}</span></td>
         <td><span class="mt-pill mt-qc-${this._qualityCls(row.setup_quality)}">${this._esc(row.setup_quality || '—')}</span></td>
         <td class="mt-wl-missing" title="${this._esc(mf)}">${this._esc(mc)}</td>
-        <td class="mt-wl-price">${this._fmtBTC(row.price)}</td>
-        <td class="mt-wl-price">${this._fmtBTC(row.nearest_level)}</td>
+        <td class="mt-wl-price">${this._fmtETH(row.price)}</td>
+        <td class="mt-wl-price">${this._fmtETH(row.nearest_level)}</td>
         <td>${this._esc(row.current_state || '—')}</td>
         <td>${this._esc(row.execution_timing_state || '—')}</td>
         <td>${this._esc(row.event_type || '—')}</td>
         <td>${this._esc(row.level_result || '—')}</td>
         <td>${this._esc(row.short_term_flow_direction || '—')}</td>
         <td class="mt-wl-conf" title="${this._esc(row.confirmation_needed || '')}">${this._esc(confShort)}</td>
-        <td class="mt-wl-price">${this._fmtBTC(row.invalidation_level)}</td>
+        <td class="mt-wl-price">${this._fmtETH(row.invalidation_level)}</td>
       </tr>`;
     }).join('');
   }
@@ -1264,7 +1264,7 @@ export class ManualTradingPage {
     return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  _fmtBTC(val) {
+  _fmtETH(val) {
     const n = safeNumber(val);
     if (n === null) return '—';
     return n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });

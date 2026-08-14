@@ -1,4 +1,4 @@
-"""DeribitAdapter — Deribit exchange adapter for BTC options data.
+"""DeribitAdapter — Deribit exchange adapter for ETH options data.
 
 Primary institutional options venue. Quality factor: 1.50.
 
@@ -315,14 +315,14 @@ class DeribitAdapter(BaseExchangeAdapter):
 
     @staticmethod
     def _valid_instruments(value: object) -> list[dict]:
-        """Return only structurally valid BTC option instrument records."""
+        """Return only structurally valid ETH option instrument records."""
         if not isinstance(value, list):
             return []
         return [
             dict(item)
             for item in value
             if isinstance(item, dict)
-            and str(item.get("instrument_name", "")).startswith("BTC-")
+            and str(item.get("instrument_name", "")).startswith("ETH-")
         ]
 
     def _load_instrument_cache_from_disk(self) -> None:
@@ -353,7 +353,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         saved_at = time.time()
         payload = {
             "saved_at": saved_at,
-            "currency": "BTC",
+            "currency": "ETH",
             "kind": "option",
             "instruments": instruments,
         }
@@ -398,7 +398,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                     "method": "public/get_instruments",
                     "id": request_id,
                     "params": {
-                        "currency": "BTC",
+                        "currency": "ETH",
                         "kind": "option",
                         "expired": False,
                     },
@@ -499,7 +499,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         return None
 
     async def fetch_instruments(self) -> list[dict]:
-        """Fetch all active BTC option instruments."""
+        """Fetch all active ETH option instruments."""
         now = time.time()
         if (
             self._instruments_cache
@@ -516,7 +516,7 @@ class DeribitAdapter(BaseExchangeAdapter):
                 return list(self._instruments_cache)
 
             result = await self._rpc_get("get_instruments", {
-                "currency": "BTC",
+                "currency": "ETH",
                 "kind": "option",
                 "expired": "false",
             }, max_retries=1)
@@ -678,7 +678,7 @@ class DeribitAdapter(BaseExchangeAdapter):
 
         self._spot_rest_fallback_count += 1
         result = await self._rpc_get("get_index_price", {
-            "index_name": "btc_usd",
+            "index_name": "eth_usd",
         }, max_retries=1)
         if result and "index_price" in result:
             self._spot_price = float(result["index_price"])
@@ -730,7 +730,7 @@ class DeribitAdapter(BaseExchangeAdapter):
 
                     await self._enable_ws_server_heartbeat(ws)
                     await self._ws_subscribe(ws, [
-                        "deribit_price_index.btc_usd",
+                        "deribit_price_index.eth_usd",
                     ])
                     await self._supervise_ws_connection(ws)
 
@@ -1036,7 +1036,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         strikes = []
         for item in instruments:
             instrument_name = str(item.get("instrument_name", ""))
-            if not instrument_name.startswith("BTC-"):
+            if not instrument_name.startswith("ETH-"):
                 continue
             try:
                 strike = float(item.get("strike") or 0.0)
@@ -1117,7 +1117,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         instrument_names = sorted({
             str(item.get("instrument_name", ""))
             for item in instruments
-            if str(item.get("instrument_name", "")).startswith("BTC-")
+            if str(item.get("instrument_name", "")).startswith("ETH-")
         })
         if not instrument_names:
             if not self.last_error:
@@ -1603,7 +1603,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         instrument_name = str(
             data.get("instrument_name") or instrument_name
         )
-        if not instrument_name.startswith("BTC-"):
+        if not instrument_name.startswith("ETH-"):
             return False
 
         previous_ticker = self._ticker_cache_by_instrument.get(
@@ -1763,7 +1763,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         channel = params.get("channel", "")
         data = params.get("data", {})
 
-        if channel == "deribit_price_index.btc_usd":
+        if channel == "deribit_price_index.eth_usd":
             price = data.get("price")
             if price:
                 self._spot_price = float(price)

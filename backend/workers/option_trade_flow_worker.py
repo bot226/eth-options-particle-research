@@ -1,4 +1,4 @@
-"""Standalone public BTC option-trade collector for research.
+"""Standalone public ETH option-trade collector for research.
 
 This observer writes raw, deduplicated Bybit and Deribit option trades to its
 own SQLite database. It never reads or changes MOS state, scores, candidates,
@@ -44,7 +44,7 @@ DERIBIT_HEARTBEAT_INTERVAL_SECONDS = 10.0
 DERIBIT_HEARTBEAT_TIMEOUT_SECONDS = 10.0
 DERIBIT_HEARTBEAT_MAX_SILENCE_SECONDS = 30.0
 BACKFILL_MIN_INTERVAL_SECONDS = 300.0
-BYBIT_OPTION_TRADE_TOPIC = "publicTrade.BTC"
+BYBIT_OPTION_TRADE_TOPIC = "publicTrade.ETH"
 
 
 def _float(value: Any) -> float | None:
@@ -470,7 +470,7 @@ class OptionTradeFlowCollector:
                 if exchange == "bybit":
                     response = await client.get(
                         f"{BYBIT_REST_URL}/v5/market/recent-trade",
-                        params={"category": "option", "baseCoin": "BTC", "limit": 1000},
+                        params={"category": "option", "baseCoin": "ETH", "limit": 1000},
                     )
                     response.raise_for_status()
                     payload = response.json()
@@ -480,7 +480,7 @@ class OptionTradeFlowCollector:
                 else:
                     response = await client.get(
                         f"{DERIBIT_REST_URL}/public/get_last_trades_by_currency",
-                        params={"currency": "BTC", "kind": "option", "count": 1000, "sorting": "asc"},
+                        params={"currency": "ETH", "kind": "option", "count": 1000, "sorting": "asc"},
                     )
                     response.raise_for_status()
                     payload = response.json()
@@ -577,7 +577,7 @@ class OptionTradeFlowCollector:
                                 "jsonrpc": "2.0",
                                 "id": 1,
                                 "method": "public/subscribe",
-                                "params": {"channels": ["trades.option.BTC.100ms"]},
+                                "params": {"channels": ["trades.option.ETH.100ms"]},
                             }
                         )
                     )
@@ -587,7 +587,7 @@ class OptionTradeFlowCollector:
                     if acknowledgement.get("id") != 1 or acknowledgement.get("error"):
                         raise RuntimeError(f"subscription_rejected:{acknowledgement}")
                     channels = acknowledgement.get("result") or []
-                    if "trades.option.BTC.100ms" not in channels:
+                    if "trades.option.ETH.100ms" not in channels:
                         raise RuntimeError(f"subscription_not_confirmed:{acknowledgement}")
                     status["connection_state"] = "subscribed"
                     await self._request_deribit_server_heartbeat(
@@ -628,7 +628,7 @@ class OptionTradeFlowCollector:
         payload: dict[str, Any],
     ) -> None:
         params = payload.get("params", {})
-        if params.get("channel") != "trades.option.BTC.100ms":
+        if params.get("channel") != "trades.option.ETH.100ms":
             return
         status["message_count"] += 1
         status["last_message_utc"] = time.time()

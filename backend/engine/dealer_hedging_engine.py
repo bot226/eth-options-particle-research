@@ -79,7 +79,7 @@ class DealerHedgingEngine:
                 result["scenarios"]["up"][f"+{move*100}%"] = {
                     "simulated_spot": spot_up,
                     "net_gex": net_up,
-                    "hedge_requirement_btc": round(hedge_up, 2),
+                    "hedge_requirement_eth": round(hedge_up, 2),
                     "action": "BUY" if hedge_up > 0 else "SELL"
                 }
                 
@@ -97,7 +97,7 @@ class DealerHedgingEngine:
                 result["scenarios"]["down"][f"-{move*100}%"] = {
                     "simulated_spot": spot_down,
                     "net_gex": net_down,
-                    "hedge_requirement_btc": round(hedge_down, 2),
+                    "hedge_requirement_eth": round(hedge_down, 2),
                     "action": "BUY" if hedge_down > 0 else "SELL"
                 }
                 
@@ -107,11 +107,11 @@ class DealerHedgingEngine:
             result["metrics"]["max_rebalancing_pressure"] = round(max_pressure, 2)
             
             # ── Hedge acceleration risk (existing logic) ──────────────
-            up_1 = abs(result["scenarios"]["up"].get("+1.0%", {}).get("hedge_requirement_btc", 0))
-            up_3 = abs(result["scenarios"]["up"].get("+3.0%", {}).get("hedge_requirement_btc", 0))
+            up_1 = abs(result["scenarios"]["up"].get("+1.0%", {}).get("hedge_requirement_eth", 0))
+            up_3 = abs(result["scenarios"]["up"].get("+3.0%", {}).get("hedge_requirement_eth", 0))
             
-            down_1 = abs(result["scenarios"]["down"].get("-1.0%", {}).get("hedge_requirement_btc", 0))
-            down_3 = abs(result["scenarios"]["down"].get("-3.0%", {}).get("hedge_requirement_btc", 0))
+            down_1 = abs(result["scenarios"]["down"].get("-1.0%", {}).get("hedge_requirement_eth", 0))
+            down_3 = abs(result["scenarios"]["down"].get("-3.0%", {}).get("hedge_requirement_eth", 0))
             
             risk = "LOW"
             if (up_1 > 0 and up_3 > up_1 * 4) or (down_1 > 0 and down_3 > down_1 * 4):

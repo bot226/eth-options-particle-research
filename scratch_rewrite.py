@@ -1,7 +1,7 @@
 import re
 import os
 
-with open("c:\\Users\\User\\Desktop\\Project\\btc-gpt-codex-v11-targeted-fix\\backend\\routes\\market.py", "r", encoding="utf-8") as f:
+with open("c:\\Users\\User\\Desktop\\Project\\eth-gpt-codex-v11-targeted-fix\\backend\\routes\\market.py", "r", encoding="utf-8") as f:
     content = f.read()
 
 start_marker = "        # ── LADDER GUARD (+1R CONFIRMATION) ──\n"
@@ -351,7 +351,7 @@ new_content = """        # ── MAIN CONTEXT CONFLICT GUARD ──
         manual_setup["level_ladder_guard_active"] = level_ladder_guard_active
         # ── END LADDER GUARD ──\n"""
 
-with open("c:\\Users\\User\\Desktop\\Project\\btc-gpt-codex-v11-targeted-fix\\backend\\routes\\market.py", "w", encoding="utf-8") as f:
+with open("c:\\Users\\User\\Desktop\\Project\\eth-gpt-codex-v11-targeted-fix\\backend\\routes\\market.py", "w", encoding="utf-8") as f:
     f.write(content[:start_idx] + new_content + content[end_idx:])
 
 print("Successfully replaced.")

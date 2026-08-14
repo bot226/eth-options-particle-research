@@ -39,10 +39,10 @@ export class GexPage {
           </div>
         </div>
 
-        <!-- Нижняя секция: График цены BTC с уровнями открытого интереса (OI / GEX Zones) -->
+        <!-- Нижняя секция: График цены ETH с уровнями открытого интереса (OI / GEX Zones) -->
         <div class="gex-price-panel panel">
           <div class="panel-header">
-            <span class="panel-icon">💹</span> BTC/USDT PRICE CHART & MAJOR OPEN INTEREST LEVELS
+            <span class="panel-icon">💹</span> ETH/USDT PRICE CHART & MAJOR OPEN INTEREST LEVELS
           </div>
           <div class="panel-body" style="height: 300px; position: relative;">
             <div id="page-price-chart-wrap" style="width: 100%; height: 100%;">
@@ -74,7 +74,7 @@ export class GexPage {
       );
     }
 
-    // 2. Рендерим график цены BTC с уровнями OI
+    // 2. Рендерим график цены ETH с уровнями OI
     const priceWrap = document.getElementById('page-price-chart-wrap');
     if (priceWrap && klines && klines.length) {
       // Очищаем лоадер перед отрисовкой в первый раз

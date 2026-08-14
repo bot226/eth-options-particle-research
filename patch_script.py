@@ -1,7 +1,7 @@
 import os
 import re
 
-file_path = r"C:\Users\User\Desktop\Project\btc-gpt-codex-v11-targeted-fix\backend\routes\market.py"
+file_path = r"C:\Users\User\Desktop\Project\eth-gpt-codex-v11-targeted-fix\backend\routes\market.py"
 with open(file_path, "r", encoding="utf-8") as f:
     content = f.read()
 

@@ -1,4 +1,4 @@
-"""BTC Options Dashboard — FastAPI backend."""
+"""ETH Options Dashboard — FastAPI backend."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -39,7 +39,7 @@ server_snapshot_worker = ServerSnapshotWorker(interval_sec=25)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle."""
-    log.info("Starting BTC Options Dashboard backend...")
+    log.info("Starting ETH Options Dashboard backend...")
     
     # --- DIAGNOSTICS ---
     import os
@@ -121,7 +121,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="BTC Options Dashboard",
+    title="ETH Options Dashboard",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -148,7 +148,7 @@ except ImportError as e:
 
 @app.get("/")
 async def root():
-    return {"service": "BTC Options Dashboard", "status": "running"}
+    return {"service": "ETH Options Dashboard", "status": "running"}
 
 
 if __name__ == "__main__":
@@ -222,5 +222,4 @@ if __name__ == "__main__":
         sys.exit(0)
 
     import uvicorn
-    # Changed to 8005 temporarily for backend test since 8000 was busy
-    uvicorn.run("main:app", host="0.0.0.0", port=8005, reload=False)
+    uvicorn.run("main:app", host=API_HOST, port=API_PORT, reload=False)

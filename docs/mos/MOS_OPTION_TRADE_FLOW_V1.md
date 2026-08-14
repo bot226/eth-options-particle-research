@@ -9,8 +9,8 @@ side.
 
 The observer uses public, unauthenticated feeds:
 
-- Bybit: `publicTrade.BTC`;
-- Deribit: `trades.option.BTC.100ms`.
+- Bybit: `publicTrade.ETH`;
+- Deribit: `trades.option.ETH.100ms`.
 
 It performs a best-effort recent-trade REST backfill at startup/reconnection, no
 more than once per exchange per five minutes. WebSocket streams remain primary.
@@ -55,7 +55,7 @@ the latest-state table alone is not accepted as proof of a clean research window
 Start the normal dashboard and open:
 
 ```text
-http://localhost:8005/api/research/option-trade-flow-status
+http://localhost:8101/api/research/option-trade-flow-status
 ```
 
 Healthy result after startup/backfill:

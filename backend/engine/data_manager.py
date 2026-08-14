@@ -38,7 +38,7 @@ class DataManager:
         self.expiries: list[str] = []
         self.strikes: list[int] = []
 
-        # Свечи BTCUSDT: [{ts, o, h, l, c, v}, ...]
+        # Свечи ETHUSDT: [{ts, o, h, l, c, v}, ...]
         self.klines: list = []
 
         # Предыдущий snapshot для дельт
@@ -162,7 +162,7 @@ class DataManager:
             symbol = t.get("symbol", "")
             if not symbol:
                 continue
-            # Парсим символ: BTC-29NOV24-85000-C или BTC-29NOV24-85000-C-USDT
+            # Парсим символ: ETH-29NOV24-85000-C или ETH-29NOV24-85000-C-USDT
             parts = symbol.split("-")
             if len(parts) < 4:
                 continue
@@ -209,7 +209,7 @@ class DataManager:
     def on_ws_ticker(self, data: dict):
         """Обработка одиночного тикера из Bybit WebSocket."""
         symbol = data.get("symbol", "")
-        if not symbol or not symbol.startswith("BTC-"):
+        if not symbol or not symbol.startswith("ETH-"):
             return
         parts = symbol.split("-")
         if len(parts) < 4:

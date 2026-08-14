@@ -1,4 +1,4 @@
-"""SQLite schema for the autonomous BTC options particle collector.
+"""SQLite schema for the autonomous ETH options particle collector.
 
 This module owns only the collector database. It does not import MOS engines,
 write MOS databases, emit trading signals, or change dashboard state.

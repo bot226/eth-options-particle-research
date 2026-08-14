@@ -269,7 +269,7 @@ class ReplayOutcomeEngine:
             """
             SELECT MAX(timestamp_utc) AS latest_ts
             FROM ohlcv_candles
-            WHERE symbol = 'BTCUSDT'
+            WHERE symbol = 'ETHUSDT'
               AND timeframe = '1m'
             """
         )
@@ -282,7 +282,7 @@ class ReplayOutcomeEngine:
             """
             SELECT close
             FROM ohlcv_candles
-            WHERE symbol = 'BTCUSDT'
+            WHERE symbol = 'ETHUSDT'
               AND timeframe = '1m'
               AND timestamp_utc BETWEEN ? AND ?
             ORDER BY ABS(timestamp_utc - ?) ASC
@@ -1060,7 +1060,7 @@ class ReplayOutcomeEngine:
             if spot > 0:
                 return spot
         payload = cls._decode_payload(event.get("event_payload_json"))
-        for key in ("spot_price", "spot", "price", "mark_price", "underlying_price", "btc_price"):
+        for key in ("spot_price", "spot", "price", "mark_price", "underlying_price", "eth_price"):
             spot = safe_float(payload.get(key))
             if spot > 0:
                 return spot
@@ -1113,7 +1113,7 @@ class ReplayOutcomeEngine:
             """
             SELECT timestamp_utc, open, high, low, close, volume
             FROM ohlcv_candles
-            WHERE symbol = 'BTCUSDT'
+            WHERE symbol = 'ETHUSDT'
               AND timeframe = '1m'
               AND timestamp_utc BETWEEN ? AND ?
             ORDER BY timestamp_utc ASC

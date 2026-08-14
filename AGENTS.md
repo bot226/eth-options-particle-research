@@ -1,6 +1,6 @@
 # AGENTS.md — MOS Backend Development Rules
 
-This repository contains **MOS — Institutional Market Structure Intelligence System** for BTC options.
+This repository contains **MOS — Institutional Market Structure Intelligence System** for ETH options.
 
 Before making any code changes, always read:
 
@@ -32,9 +32,9 @@ Do **not** turn MOS into a buy/sell signal dashboard.
 ## Current stable Research Layer version
 
 ```python
-CODE_VERSION = "research_fix_2026_08_10_v70"
+CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v68_option_trade_flow_quality_history"
+ENGINE_PATCH_VERSION = "v1_eth_asset_runtime_isolation"
 ```
 
 ## Known working components

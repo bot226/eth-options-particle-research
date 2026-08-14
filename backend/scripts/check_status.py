@@ -2,7 +2,7 @@
 import urllib.request
 import json
 
-r = urllib.request.urlopen('http://localhost:8005/api/research/diagnostics', timeout=5)
+r = urllib.request.urlopen('http://localhost:8101/api/research/diagnostics', timeout=5)
 d = json.loads(r.read())
 print(f"Snapshots: {d['snapshot_count']} | Events: {d['event_count']}")
 print(f"Version: {d['code_version']} | Integrity: {d['integrity_check']}")

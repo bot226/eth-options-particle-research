@@ -59,7 +59,7 @@ class _ContinuousDeribitTradeWebSocket:
             return json.dumps({
                 "jsonrpc": "2.0",
                 "id": 1,
-                "result": ["trades.option.BTC.100ms"],
+                "result": ["trades.option.ETH.100ms"],
             })
         if self.set_heartbeat_ack_pending:
             self.set_heartbeat_ack_pending = False
@@ -92,7 +92,7 @@ class _ContinuousDeribitTradeWebSocket:
         return json.dumps({
             "method": "subscription",
             "params": {
-                "channel": "trades.option.BTC.100ms",
+                "channel": "trades.option.ETH.100ms",
                 "data": [],
             },
         })
@@ -117,7 +117,7 @@ class OptionTradeNormalizationTest(unittest.TestCase):
                     "success": True,
                     "data": {
                         "failTopics": [],
-                        "successTopics": ["publicTrade.BTC"],
+                        "successTopics": ["publicTrade.ETH"],
                     },
                     "type": "COMMAND_RESP",
                 }
@@ -144,7 +144,7 @@ class OptionTradeNormalizationTest(unittest.TestCase):
         trade = normalize_bybit_trade(
             {
                 "T": 1786300000123,
-                "s": "BTC-25SEP26-70000-C-USDT",
+                "s": "ETH-25SEP26-70000-C-USDT",
                 "S": "Buy",
                 "v": "1.5",
                 "p": "0.025",
@@ -162,7 +162,7 @@ class OptionTradeNormalizationTest(unittest.TestCase):
 
         self.assertIsNotNone(trade)
         self.assertEqual(trade["exchange"], "bybit")
-        self.assertEqual(trade["contract_id"], "BTC-20260925-70000-C")
+        self.assertEqual(trade["contract_id"], "ETH-20260925-70000-C")
         self.assertEqual(trade["option_type"], "C")
         self.assertEqual(trade["taker_side"], "BUY")
         self.assertEqual(trade["contracts"], 1.5)
@@ -179,7 +179,7 @@ class OptionTradeNormalizationTest(unittest.TestCase):
                 "price": 0.0525,
                 "mark_price": 0.05253883,
                 "iv": 45.91,
-                "instrument_name": "BTC-25SEP26-65000-P",
+                "instrument_name": "ETH-25SEP26-65000-P",
                 "index_price": 66930.31,
                 "direction": "sell",
                 "amount": 3,
@@ -191,14 +191,14 @@ class OptionTradeNormalizationTest(unittest.TestCase):
 
         self.assertIsNotNone(trade)
         self.assertEqual(trade["exchange"], "deribit")
-        self.assertEqual(trade["contract_id"], "BTC-20260925-65000-P")
+        self.assertEqual(trade["contract_id"], "ETH-20260925-65000-P")
         self.assertEqual(trade["option_type"], "P")
         self.assertEqual(trade["taker_side"], "SELL")
         self.assertAlmostEqual(trade["trade_iv_decimal"], 0.4591)
         self.assertEqual(trade["is_block_trade"], 1)
 
     def test_rejects_incomplete_trade(self):
-        self.assertIsNone(normalize_bybit_trade({"s": "BTC-25SEP26-70000-C"}))
+        self.assertIsNone(normalize_bybit_trade({"s": "ETH-25SEP26-70000-C"}))
         self.assertIsNone(normalize_deribit_trade({"trade_id": "1"}))
 
 
@@ -211,14 +211,14 @@ class OptionTradeFlowHeartbeatTest(unittest.IsolatedAsyncioTestCase):
             websocket = _DeribitApplicationHeartbeatWebSocket(messages=[{
                 "method": "subscription",
                 "params": {
-                    "channel": "trades.option.BTC.100ms",
+                    "channel": "trades.option.ETH.100ms",
                     "data": [{
                         "trade_seq": 468,
                         "trade_id": "heartbeat-trade",
                         "timestamp": int(time.time() * 1000),
                         "price": 0.0525,
                         "iv": 45.91,
-                        "instrument_name": "BTC-25SEP26-65000-P",
+                        "instrument_name": "ETH-25SEP26-65000-P",
                         "direction": "sell",
                         "amount": 1,
                     }],
@@ -297,7 +297,7 @@ class OptionTradeFlowStoreTest(unittest.TestCase):
                 "price": 0.01,
                 "mark_price": 0.011,
                 "iv": 50,
-                "instrument_name": "BTC-25SEP26-70000-C",
+                "instrument_name": "ETH-25SEP26-70000-C",
                 "index_price": 70000,
                 "direction": "buy",
                 "amount": 2,

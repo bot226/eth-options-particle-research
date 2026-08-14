@@ -3,14 +3,14 @@ import os
 from datetime import datetime
 
 # Set cwd to backend so sqlite connects correctly
-os.chdir("c:\\Users\\User\\Desktop\\Project\\btc-gpt-codex-v11-targeted-fix\\backend")
+os.chdir("c:\\Users\\User\\Desktop\\Project\\eth-gpt-codex-v11-targeted-fix\\backend")
 
 from routes.market import _build_manual_trading_payload
 
 # Create a mock market_state that will trigger ENTRY_CANDIDATE
 market_state = {
     "timestamp": 1781075025000, # corresponding to 2026-06-10T07:03:45Z
-    "symbol": "BTCUSD",
+    "symbol": "ETHUSD",
     "spot": 61500,
     "current_state": "TRANSITION",
     "execution_timing_state": "EXECUTION_WINDOW_OPEN",

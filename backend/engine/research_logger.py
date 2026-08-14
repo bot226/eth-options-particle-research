@@ -733,7 +733,7 @@ class ResearchLogger:
             cursor.execute('''
                 SELECT timestamp_utc, open, high, low, close, volume
                 FROM ohlcv_candles
-                WHERE symbol = 'BTCUSDT'
+                WHERE symbol = 'ETHUSDT'
                   AND timeframe = '1m'
                   AND timestamp_utc BETWEEN ? AND ?
                 ORDER BY timestamp_utc ASC

@@ -53,7 +53,7 @@ class SyntheticOrderflowEngine:
             oi_delta = 0.0
             if dm and hasattr(dm, "get_oi_delta_pct"):
                 try:
-                    oi_delta = dm.get_oi_delta_pct("BTC", hours_ago=24)
+                    oi_delta = dm.get_oi_delta_pct("ETH", hours_ago=24)
                 except Exception:
                     pass
 

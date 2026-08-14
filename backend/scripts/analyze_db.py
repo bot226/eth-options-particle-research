@@ -3,7 +3,11 @@ import sqlite3
 import sys
 import os
 
-db_path = sys.argv[1] if len(sys.argv) > 1 else r'C:\Users\User\Desktop\Project\btc-dashboard\backend\data\mos_research.db'
+db_path = (
+    sys.argv[1]
+    if len(sys.argv) > 1
+    else os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "mos_research.db"))
+)
 
 if not os.path.exists(db_path):
     print(f"DB NOT FOUND: {db_path}")

@@ -120,7 +120,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def test_ws_ticker_message_populates_non_blocking_cache(self):
         now_ms = int(time.time() * 1000)
         raw_ticker = {
-            "instrument_name": "BTC-14AUG26-65000-C",
+            "instrument_name": "ETH-14AUG26-65000-C",
             "timestamp": now_ms,
             "open_interest": 123.5,
             "mark_iv": 55.2,
@@ -142,7 +142,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         await self.adapter._handle_ws_message({
             "method": "subscription",
             "params": {
-                "channel": "incremental_ticker.BTC-14AUG26-65000-C",
+                "channel": "incremental_ticker.ETH-14AUG26-65000-C",
                 "data": raw_ticker,
             },
         })
@@ -164,7 +164,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics["deribit_ws_fresh_tickers"], 1)
 
     async def test_incremental_ticker_merges_partial_nested_updates(self):
-        instrument_name = "BTC-14AUG26-65000-C"
+        instrument_name = "ETH-14AUG26-65000-C"
         channel = f"incremental_ticker.{instrument_name}"
         await self.adapter._handle_ws_message({
             "method": "subscription",
@@ -200,7 +200,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         await self.adapter._handle_ws_message({
             "method": "subscription",
             "params": {
-                "channel": "deribit_price_index.btc_usd",
+                "channel": "deribit_price_index.eth_usd",
                 "data": {"price": 63_500.0},
             },
         })
@@ -223,8 +223,8 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_rest_ticker_batch_seeds_greeks_for_every_contract(self):
         instrument_names = [
-            "BTC-14AUG26-65000-C",
-            "BTC-14AUG26-65000-P",
+            "ETH-14AUG26-65000-C",
+            "ETH-14AUG26-65000-P",
         ]
 
         async def ticker_result(method, params, max_retries=3):
@@ -278,8 +278,8 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(return_value=None),
         ):
             successes = await self.adapter._bootstrap_ticker_rest_batch([
-                "BTC-14AUG26-65000-C",
-                "BTC-14AUG26-65000-P",
+                "ETH-14AUG26-65000-C",
+                "ETH-14AUG26-65000-P",
             ])
 
         self.assertEqual(successes, 0)
@@ -300,13 +300,13 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             for _ in range(3):
                 result = await self.adapter._rpc_get(
                     "ticker",
-                    {"instrument_name": "BTC-14AUG26-65000-C"},
+                    {"instrument_name": "ETH-14AUG26-65000-C"},
                     max_retries=1,
                 )
                 self.assertIsNone(result)
             skipped = await self.adapter._rpc_get(
                 "ticker",
-                {"instrument_name": "BTC-14AUG26-65000-P"},
+                {"instrument_name": "ETH-14AUG26-65000-P"},
                 max_retries=1,
             )
 
@@ -352,7 +352,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             for _ in range(3):
                 self.assertIsNone(await self.adapter._rpc_get(
                     "ticker",
-                    {"instrument_name": "BTC-EXPIRED-C"},
+                    {"instrument_name": "ETH-EXPIRED-C"},
                     max_retries=1,
                 ))
 
@@ -397,13 +397,13 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         ) as http_get:
             first_task = asyncio.create_task(self.adapter._rpc_get(
                 "get_index_price",
-                {"index_name": "btc_usd"},
+                {"index_name": "eth_usd"},
                 max_retries=1,
             ))
             await probe_started.wait()
             second = await self.adapter._rpc_get(
                 "get_index_price",
-                {"index_name": "btc_usd"},
+                {"index_name": "eth_usd"},
                 max_retries=1,
             )
             release_probe.set()
@@ -425,7 +425,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_open_rest_circuit_returns_stale_instruments_without_io(self):
         instruments = [
-            {"instrument_name": "BTC-14AUG26-65000-C"},
+            {"instrument_name": "ETH-14AUG26-65000-C"},
         ]
         self.adapter._instruments_cache = instruments
         self.adapter._instruments_cache_ts = 0.0
@@ -472,7 +472,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics["deribit_rest_circuit_open_count"], 2)
 
     async def test_refresh_scheduler_makes_no_requests_while_circuit_open(self):
-        name = "BTC-14AUG26-65000-C"
+        name = "ETH-14AUG26-65000-C"
         self.adapter._ws_instruments_count = 1
         self.adapter._ws_core_instrument_names = {name}
         self.adapter._ticker_bootstrap_instrument_names = [name]
@@ -527,7 +527,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             started.set()
             await release.wait()
 
-        instrument_names = ["BTC-14AUG26-65000-C"]
+        instrument_names = ["ETH-14AUG26-65000-C"]
         with patch.object(
             self.adapter,
             "_bootstrap_full_tickers",
@@ -544,7 +544,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     def test_bootstrap_cycle_skips_fresh_full_core_tickers(self):
         instrument_names = [
-            f"BTC-14AUG26-{60_000 + index}-C"
+            f"ETH-14AUG26-{60_000 + index}-C"
             for index in range(240)
         ]
         for name in instrument_names[:100]:
@@ -578,7 +578,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     def test_round_robin_refresh_batch_skips_recent_core_tickers(self):
         instrument_names = [
-            f"BTC-14AUG26-{60_000 + index}-C"
+            f"ETH-14AUG26-{60_000 + index}-C"
             for index in range(4)
         ]
         for name in instrument_names:
@@ -613,11 +613,11 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_refresh_scheduler_reserves_nine_batches_for_core(self):
         core_names = [
-            f"BTC-14AUG26-{60_000 + index}-C"
+            f"ETH-14AUG26-{60_000 + index}-C"
             for index in range(20)
         ]
         tail_names = [
-            f"BTC-21AUG26-{70_000 + index}-P"
+            f"ETH-21AUG26-{70_000 + index}-P"
             for index in range(4)
         ]
         self.adapter._ws_instruments_count = len(core_names) + len(tail_names)
@@ -714,11 +714,11 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_refresh_scheduler_does_not_backfill_before_core_ready(self):
         core_names = [
-            f"BTC-14AUG26-{60_000 + index}-C"
+            f"ETH-14AUG26-{60_000 + index}-C"
             for index in range(10)
         ]
         tail_names = [
-            f"BTC-21AUG26-{70_000 + index}-P"
+            f"ETH-21AUG26-{70_000 + index}-P"
             for index in range(4)
         ]
         self.adapter._ws_instruments_count = len(core_names) + len(tail_names)
@@ -778,8 +778,8 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_concurrent_instrument_discovery_uses_one_rest_request(self):
         instruments = [
-            {"instrument_name": "BTC-14AUG26-65000-C"},
-            {"instrument_name": "BTC-14AUG26-65000-P"},
+            {"instrument_name": "ETH-14AUG26-65000-C"},
+            {"instrument_name": "ETH-14AUG26-65000-P"},
         ]
 
         async def delayed_discovery(*args, **kwargs):
@@ -801,7 +801,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_instrument_discovery_falls_back_to_last_good_cache(self):
         instruments = [
-            {"instrument_name": "BTC-14AUG26-65000-C"},
+            {"instrument_name": "ETH-14AUG26-65000-C"},
         ]
         with patch.object(
             self.adapter,
@@ -821,8 +821,8 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_instrument_discovery_uses_websocket_rpc_after_rest_failure(self):
         instruments = [
-            {"instrument_name": "BTC-14AUG26-65000-C"},
-            {"instrument_name": "BTC-14AUG26-65000-P"},
+            {"instrument_name": "ETH-14AUG26-65000-C"},
+            {"instrument_name": "ETH-14AUG26-65000-P"},
         ]
         with patch.object(
             self.adapter,
@@ -844,7 +844,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_websocket_instrument_fallback_requests_compressed_chain(self):
         instruments = [
-            {"instrument_name": "BTC-14AUG26-65000-C"},
+            {"instrument_name": "ETH-14AUG26-65000-C"},
         ]
         websocket = _InstrumentDiscoveryWebSocket(instruments)
         with patch(
@@ -872,7 +872,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_instrument_discovery_records_compression_diagnostics(self):
         instruments = [
-            {"instrument_name": "BTC-14AUG26-65000-C"},
+            {"instrument_name": "ETH-14AUG26-65000-C"},
         ]
 
         class _CompressedResponse:
@@ -920,7 +920,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_instrument_discovery_persists_and_reloads_disk_cache(self):
         instruments = [
-            {"instrument_name": "BTC-14AUG26-65000-C"},
+            {"instrument_name": "ETH-14AUG26-65000-C"},
         ]
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_path = Path(temp_dir) / "deribit_instruments_cache.json"
@@ -965,11 +965,11 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_subscription_refresh_batches_channels_and_purges_expired_cache(self):
         instruments = [
-            {"instrument_name": f"BTC-14AUG26-{50_000 + index}-C"}
+            {"instrument_name": f"ETH-14AUG26-{50_000 + index}-C"}
             for index in range(866)
         ]
-        self.adapter._ticker_cache_by_instrument["BTC-3AUG26-40000-P"] = {
-            "instrument_name": "BTC-3AUG26-40000-P"
+        self.adapter._ticker_cache_by_instrument["ETH-3AUG26-40000-P"] = {
+            "instrument_name": "ETH-3AUG26-40000-P"
         }
         websocket = _FakeWebSocket(self.adapter)
 
@@ -991,28 +991,28 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         }
         self.assertEqual(len(subscribed), 240)
         self.assertTrue(all(
-            channel.startswith("incremental_ticker.BTC-")
+            channel.startswith("incremental_ticker.ETH-")
             for channel in subscribed
         ))
         self.assertEqual(len(self.adapter._subscribed_ticker_channels), 240)
         self.assertEqual(self.adapter._pending_ticker_channels, {})
         self.assertGreater(self.adapter._ws_ticker_watch_started_ts, 0.0)
         self.assertNotIn(
-            "BTC-3AUG26-40000-P",
+            "ETH-3AUG26-40000-P",
             self.adapter._ticker_cache_by_instrument,
         )
 
     async def test_subscription_refresh_unsubscribes_contracts_outside_core(self):
-        old_channel = "incremental_ticker.BTC-3AUG26-40000-P"
+        old_channel = "incremental_ticker.ETH-3AUG26-40000-P"
         self.adapter._subscribed_ticker_channels.add(old_channel)
         instruments = [
             {
-                "instrument_name": "BTC-14AUG26-65000-C",
+                "instrument_name": "ETH-14AUG26-65000-C",
                 "expiration_timestamp": 1,
                 "strike": 65_000,
             },
             {
-                "instrument_name": "BTC-14AUG26-65000-P",
+                "instrument_name": "ETH-14AUG26-65000-P",
                 "expiration_timestamp": 1,
                 "strike": 65_000,
             },
@@ -1037,7 +1037,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.adapter._subscribed_ticker_channels), 2)
 
     async def test_stale_ws_cache_is_not_returned_to_live_mos(self):
-        name = "BTC-14AUG26-65000-P"
+        name = "ETH-14AUG26-65000-P"
         self.adapter._ticker_cache_by_instrument[name] = {
             "instrument_name": name
         }
@@ -1053,11 +1053,11 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def test_partially_warmed_chain_is_not_returned_to_live_mos(self):
         self.adapter._ws_instruments_count = 10
         self.adapter._ws_core_instrument_names = {
-            f"BTC-14AUG26-{60_000 + index}-C"
+            f"ETH-14AUG26-{60_000 + index}-C"
             for index in range(10)
         }
         for index in range(6):
-            name = f"BTC-14AUG26-{60_000 + index}-C"
+            name = f"ETH-14AUG26-{60_000 + index}-C"
             self.adapter._ticker_cache_by_instrument[name] = {
                 "instrument_name": name
             }
@@ -1073,11 +1073,11 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def test_core_coverage_can_be_ready_while_full_chain_backfills(self):
         self.adapter._ws_instruments_count = 866
         self.adapter._ws_core_instrument_names = {
-            f"BTC-14AUG26-{60_000 + index}-C"
+            f"ETH-14AUG26-{60_000 + index}-C"
             for index in range(10)
         }
         for index in range(7):
-            name = f"BTC-14AUG26-{60_000 + index}-C"
+            name = f"ETH-14AUG26-{60_000 + index}-C"
             self.adapter._store_ticker_snapshot(
                 {
                     "instrument_name": name,
@@ -1104,7 +1104,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
             for strike_index in range(100):
                 instruments.append({
                     "instrument_name": (
-                        f"BTC-{expiry_index}-{50_000 + strike_index}-C"
+                        f"ETH-{expiry_index}-{50_000 + strike_index}-C"
                     ),
                     "expiration_timestamp": expiry_index + 1,
                     "strike": 50_000 + strike_index,
@@ -1121,7 +1121,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         for expiry_index in range(4):
             self.assertEqual(
                 sum(
-                    name.startswith(f"BTC-{expiry_index}-")
+                    name.startswith(f"ETH-{expiry_index}-")
                     for name in selected
                 ),
                 60,
@@ -1132,7 +1132,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.adapter._is_ws_ticker_stream_idle(now=now))
 
         self.adapter._subscribed_ticker_channels.add(
-            "incremental_ticker.BTC-14AUG26-65000-C"
+            "incremental_ticker.ETH-14AUG26-65000-C"
         )
         self.adapter._ws_ticker_watch_started_ts = now - 61.0
         self.assertTrue(self.adapter._is_ws_ticker_stream_idle(now=now))
@@ -1143,7 +1143,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def test_silent_ticker_stream_with_failed_heartbeat_forces_reconnect(self):
         self.adapter._running = True
         self.adapter._subscribed_ticker_channels.add(
-            "incremental_ticker.BTC-14AUG26-65000-C"
+            "incremental_ticker.ETH-14AUG26-65000-C"
         )
         self.adapter._ws_ticker_watch_started_ts = time.time() - 1.0
 
@@ -1171,7 +1171,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def test_healthy_heartbeat_requests_soft_resubscribe_without_reconnect(self):
         now = time.time()
         self.adapter._subscribed_ticker_channels.add(
-            "incremental_ticker.BTC-14AUG26-65000-C"
+            "incremental_ticker.ETH-14AUG26-65000-C"
         )
         self.adapter._ws_ticker_watch_started_ts = now - 61.0
 
@@ -1188,7 +1188,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.adapter._ws_subscription_retry_event.is_set())
 
     async def test_json_rpc_heartbeat_preserves_ticker_messages_while_waiting(self):
-        instrument_name = "BTC-14AUG26-65000-C"
+        instrument_name = "ETH-14AUG26-65000-C"
         websocket = _HeartbeatSilentWebSocket(messages=[{
             "method": "subscription",
             "params": {
@@ -1272,7 +1272,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.adapter._ws_soft_resubscribe_requested)
 
     async def test_busy_ticker_stream_does_not_postpone_heartbeat(self):
-        instrument_name = "BTC-14AUG26-65000-C"
+        instrument_name = "ETH-14AUG26-65000-C"
         now = time.time()
         self.adapter._running = True
         self.adapter._ws_connection_started_ts = now - 21.0
@@ -1319,7 +1319,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.adapter._ws_idle_reconnect_count, 1)
 
     def test_recent_heartbeat_qualifies_quiet_transport_without_refreshing_data(self):
-        instrument_name = "BTC-14AUG26-65000-C"
+        instrument_name = "ETH-14AUG26-65000-C"
         channel = f"incremental_ticker.{instrument_name}"
         now = time.time()
         self.adapter._ws_core_instrument_names = {instrument_name}
@@ -1339,7 +1339,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.adapter._is_ws_ticker_transport_healthy())
 
     async def test_soft_resubscribe_rebuilds_core_and_requires_real_ticker(self):
-        instrument_name = "BTC-14AUG26-65000-C"
+        instrument_name = "ETH-14AUG26-65000-C"
         channel = f"incremental_ticker.{instrument_name}"
         instruments = [{
             "instrument_name": instrument_name,
@@ -1394,7 +1394,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def test_soft_resubscribe_grace_timeout_forces_reconnect(self):
         now = time.time()
         self.adapter._subscribed_ticker_channels.add(
-            "incremental_ticker.BTC-14AUG26-65000-C"
+            "incremental_ticker.ETH-14AUG26-65000-C"
         )
         self.adapter._ws_ticker_watch_started_ts = now - 200.0
         self.adapter._ws_soft_resubscribe_in_progress = True
@@ -1450,9 +1450,9 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ws_rpc_error_requests_subscription_retry(self):
         self.adapter._subscribed_ticker_channels.add(
-            "incremental_ticker.BTC-14AUG26-65000-C"
+            "incremental_ticker.ETH-14AUG26-65000-C"
         )
-        failed_channel = "incremental_ticker.BTC-14AUG26-66000-C"
+        failed_channel = "incremental_ticker.ETH-14AUG26-66000-C"
         self.adapter._pending_ticker_channels[7] = {failed_channel}
 
         await self.adapter._handle_ws_message({
@@ -1463,7 +1463,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             self.adapter._subscribed_ticker_channels,
-            {"incremental_ticker.BTC-14AUG26-65000-C"},
+            {"incremental_ticker.ETH-14AUG26-65000-C"},
         )
         self.assertNotIn(7, self.adapter._pending_ticker_channels)
         self.assertTrue(self.adapter._ws_subscription_retry_event.is_set())
@@ -1472,8 +1472,8 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
     async def test_partial_subscription_ack_retries_only_missing_channels(self):
         websocket = _FakeWebSocket()
         channels = [
-            "incremental_ticker.BTC-14AUG26-65000-C",
-            "incremental_ticker.BTC-14AUG26-66000-C",
+            "incremental_ticker.ETH-14AUG26-65000-C",
+            "incremental_ticker.ETH-14AUG26-66000-C",
         ]
         request_id = await self.adapter._ws_subscribe(
             websocket,
@@ -1507,7 +1507,7 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 class DeribitTickerNormalizerTest(unittest.TestCase):
     def test_normalizes_nested_ws_greeks_stats_and_prices(self):
         normalized = InstrumentNormalizer.normalize_ticker("deribit", {
-            "instrument_name": "BTC-14AUG26-65000-P",
+            "instrument_name": "ETH-14AUG26-65000-P",
             "open_interest": 44.0,
             "mark_iv": 62.5,
             "bid_iv": 61.0,
@@ -1527,7 +1527,7 @@ class DeribitTickerNormalizerTest(unittest.TestCase):
         })
 
         self.assertIsNotNone(normalized)
-        self.assertEqual(normalized["canonical_id"], "BTC-20260814-65000-P")
+        self.assertEqual(normalized["canonical_id"], "ETH-20260814-65000-P")
         self.assertEqual(normalized["volume"], 8.75)
         self.assertAlmostEqual(normalized["markIv"], 0.625)
         self.assertEqual(normalized["delta"], -0.61)

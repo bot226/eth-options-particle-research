@@ -1,4 +1,4 @@
-"""BybitAdapter — Bybit exchange adapter for BTC options data.
+"""BybitAdapter — Bybit exchange adapter for ETH options data.
 
 Wraps existing BybitRestClient and BybitWebSocket into
 BaseExchangeAdapter interface. Quality factor: 0.80.
@@ -55,11 +55,11 @@ class BybitAdapter(BaseExchangeAdapter):
         self._running = True
         self._ws_tasks = [
             asyncio.create_task(self._run_ws(
-                BYBIT_WS_OPTION_URL, "tickers.BTC",
+                BYBIT_WS_OPTION_URL, "tickers.ETH",
                 self._handle_option_msg, "option"
             )),
             asyncio.create_task(self._run_ws(
-                BYBIT_WS_LINEAR_URL, "tickers.BTCUSDT",
+                BYBIT_WS_LINEAR_URL, "tickers.ETHUSDT",
                 self._handle_linear_msg, "linear"
             )),
         ]
@@ -76,7 +76,7 @@ class BybitAdapter(BaseExchangeAdapter):
     # ── REST API ─────────────────────────────────────────────────────
 
     async def fetch_instruments(self) -> list[dict]:
-        """Fetch all active BTC option instruments from Bybit."""
+        """Fetch all active ETH option instruments from Bybit."""
         t0 = time.time()
         result = await self._rest.get_instruments(base_coin=BASE_COIN)
         latency = (time.time() - t0) * 1000
@@ -84,7 +84,7 @@ class BybitAdapter(BaseExchangeAdapter):
         return result
 
     async def fetch_option_tickers(self) -> list[dict]:
-        """Fetch current tickers for all BTC options."""
+        """Fetch current tickers for all ETH options."""
         t0 = time.time()
         tickers = await self._rest.get_option_tickers(base_coin=BASE_COIN)
         latency = (time.time() - t0) * 1000
@@ -107,7 +107,7 @@ class BybitAdapter(BaseExchangeAdapter):
         return tickers
 
     async def fetch_spot_price(self) -> Optional[float]:
-        """Fetch BTC spot price from Bybit linear ticker."""
+        """Fetch ETH spot price from Bybit linear ticker."""
         t0 = time.time()
         ticker = await self._rest.get_spot_ticker(symbol=LINEAR_SYMBOL)
         latency = (time.time() - t0) * 1000

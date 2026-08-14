@@ -1,13 +1,13 @@
 """InstrumentNormalizer — Cross-exchange instrument normalization.
 
 Converts exchange-specific option symbol formats into canonical format:
-    BTC-YYYYMMDD-STRIKE-TYPE
+    ETH-YYYYMMDD-STRIKE-TYPE
 
 Examples:
-    Deribit:  BTC-26DEC25-90000-C  →  BTC-20251226-90000-C
-    Bybit:    BTC-26DEC25-90000-C  →  BTC-20251226-90000-C
-    Binance:  BTC-250626-90000-C   →  BTC-20250626-90000-C
-    OKX:      BTC-USD-250626-90000-C → BTC-20250626-90000-C
+    Deribit:  ETH-26DEC25-90000-C  →  ETH-20251226-90000-C
+    Bybit:    ETH-26DEC25-90000-C  →  ETH-20251226-90000-C
+    Binance:  ETH-250626-90000-C   →  ETH-20250626-90000-C
+    OKX:      ETH-USD-250626-90000-C → ETH-20250626-90000-C
 """
 
 import datetime
@@ -76,11 +76,11 @@ class InstrumentNormalizer:
         """Parse a canonical ID back into NormalizedInstrument.
 
         Args:
-            canonical_id: e.g. "BTC-20251226-90000-C"
+            canonical_id: e.g. "ETH-20251226-90000-C"
         """
         try:
             parts = canonical_id.split("-")
-            if len(parts) != 4 or parts[0] != "BTC":
+            if len(parts) != 4 or parts[0] != "ETH":
                 return None
             expiry_str = parts[1]  # YYYYMMDD
             strike = int(parts[2])
@@ -123,7 +123,7 @@ class InstrumentNormalizer:
         if iv_value <= 0:
             return 0.0
         # If IV looks like a percentage (> 5.0), convert to decimal
-        # Standard BTC IV is typically 0.2 – 2.5 in decimal
+        # Standard ETH IV is typically 0.2 – 2.5 in decimal
         if iv_value > 5.0:
             return iv_value / 100.0
         return iv_value
@@ -195,9 +195,9 @@ class InstrumentNormalizer:
 
 
 def _parse_deribit_symbol(raw: str) -> Optional[NormalizedInstrument]:
-    """Parse Deribit format: BTC-26DEC25-90000-C"""
+    """Parse Deribit format: ETH-26DEC25-90000-C"""
     parts = raw.split("-")
-    if len(parts) != 4 or parts[0] != "BTC":
+    if len(parts) != 4 or parts[0] != "ETH":
         return None
     expiry_raw = parts[1]  # e.g. "26DEC25"
     strike = int(parts[2])
@@ -208,15 +208,15 @@ def _parse_deribit_symbol(raw: str) -> Optional[NormalizedInstrument]:
     if expiry_date is None:
         return None
     expiry_str = expiry_date.strftime("%Y%m%d")
-    canonical = f"BTC-{expiry_str}-{strike}-{opt_type}"
+    canonical = f"ETH-{expiry_str}-{strike}-{opt_type}"
     return NormalizedInstrument(canonical, expiry_date, expiry_str, strike, opt_type)
 
 
 def _parse_bybit_symbol(raw: str) -> Optional[NormalizedInstrument]:
-    """Parse Bybit format: BTC-26DEC25-90000-C (same as Deribit)."""
-    # Bybit may also have USDT-settled: BTC-26DEC25-90000-C-USDT
+    """Parse Bybit format: ETH-26DEC25-90000-C (same as Deribit)."""
+    # Bybit may also have USDT-settled: ETH-26DEC25-90000-C-USDT
     parts = raw.split("-")
-    if len(parts) < 4 or parts[0] != "BTC":
+    if len(parts) < 4 or parts[0] != "ETH":
         return None
     expiry_raw = parts[1]
     strike = int(parts[2])
@@ -227,14 +227,14 @@ def _parse_bybit_symbol(raw: str) -> Optional[NormalizedInstrument]:
     if expiry_date is None:
         return None
     expiry_str = expiry_date.strftime("%Y%m%d")
-    canonical = f"BTC-{expiry_str}-{strike}-{opt_type}"
+    canonical = f"ETH-{expiry_str}-{strike}-{opt_type}"
     return NormalizedInstrument(canonical, expiry_date, expiry_str, strike, opt_type)
 
 
 def _parse_binance_symbol(raw: str) -> Optional[NormalizedInstrument]:
-    """Parse Binance EAPI format: BTC-250626-90000-C"""
+    """Parse Binance EAPI format: ETH-250626-90000-C"""
     parts = raw.split("-")
-    if len(parts) != 4 or parts[0] != "BTC":
+    if len(parts) != 4 or parts[0] != "ETH":
         return None
     expiry_raw = parts[1]  # YYMMDD
     strike = int(parts[2])
@@ -245,14 +245,14 @@ def _parse_binance_symbol(raw: str) -> Optional[NormalizedInstrument]:
     if expiry_date is None:
         return None
     expiry_str = expiry_date.strftime("%Y%m%d")
-    canonical = f"BTC-{expiry_str}-{strike}-{opt_type}"
+    canonical = f"ETH-{expiry_str}-{strike}-{opt_type}"
     return NormalizedInstrument(canonical, expiry_date, expiry_str, strike, opt_type)
 
 
 def _parse_okx_symbol(raw: str) -> Optional[NormalizedInstrument]:
-    """Parse OKX format: BTC-USD-250626-90000-C"""
+    """Parse OKX format: ETH-USD-250626-90000-C"""
     parts = raw.split("-")
-    if len(parts) != 5 or parts[0] != "BTC":
+    if len(parts) != 5 or parts[0] != "ETH":
         return None
     # parts[1] = "USD" — skip
     expiry_raw = parts[2]  # YYMMDD
@@ -264,7 +264,7 @@ def _parse_okx_symbol(raw: str) -> Optional[NormalizedInstrument]:
     if expiry_date is None:
         return None
     expiry_str = expiry_date.strftime("%Y%m%d")
-    canonical = f"BTC-{expiry_str}-{strike}-{opt_type}"
+    canonical = f"ETH-{expiry_str}-{strike}-{opt_type}"
     return NormalizedInstrument(canonical, expiry_date, expiry_str, strike, opt_type)
 
 

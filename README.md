@@ -1,8 +1,27 @@
-# BTC Options Dashboard (Variant C)
+# ETH Options Dashboard (Variant C)
 
-Real-time дашборд для анализа BTC-опционов на Bybit.
+Real-time дашборд для анализа ETH-опционов на Bybit.
 
 **Архитектура:** Python FastAPI backend + Vite JS frontend
+
+## Изоляция от BTC
+
+- Основа: BTC v70, commit `424c5692be09bd8693b41acbc65127d20f69cbb1`.
+- ETH использует отдельные процессы, порты, зависимости и локальные базы.
+- BTC-данные в ETH-проект не перенесены.
+- Остановка ETH затрагивает только дерево процессов, запущенное `run.py` этого проекта.
+- Формулы v70 сохранены, но ещё не валидированы на ETH и не считаются доказанной торговой логикой для ETH.
+
+Порты можно переопределить переменными `MOS_BACKEND_PORT` и
+`MOS_FRONTEND_PORT`; безопасные значения по умолчанию — `8101` и `5174`.
+
+Короткая проверка с автоматической штатной остановкой:
+
+```powershell
+$env:MOS_OPEN_BROWSER="0"
+$env:MOS_SMOKE_CHECK="1"
+python run.py
+```
 
 ## 📖 Документация и Справка
 
@@ -29,9 +48,9 @@ npm install
 npm run dev
 ```
 
-- **Frontend:** http://localhost:5173
-- **Backend API:** http://localhost:8000
-- **API Docs:** http://localhost:8000/docs
+- **Frontend:** http://localhost:5174
+- **Backend API:** http://localhost:8101
+- **API Docs:** http://localhost:8101/docs
 
 ## Стек
 
@@ -47,5 +66,5 @@ npm run dev
 4. IV Term Structure
 5. Top OI by Expiry
 6. Signals
-7. BTC Price + Gamma Levels
+7. ETH Price + Gamma Levels
 8. Summary

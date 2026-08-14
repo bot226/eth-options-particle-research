@@ -1,4 +1,6 @@
-"""Конфигурация BTC Options Dashboard (Variant C)."""
+"""Конфигурация ETH Options Dashboard (Variant C)."""
+
+import os
 
 # Bybit API
 BYBIT_REST_URL = "https://api.bybit.com"
@@ -6,8 +8,8 @@ BYBIT_WS_OPTION_URL = "wss://stream.bybit.com/v5/public/option"
 BYBIT_WS_LINEAR_URL = "wss://stream.bybit.com/v5/public/linear"
 
 # Параметры данных
-BASE_COIN = "BTC"
-LINEAR_SYMBOL = "BTCUSDT"
+BASE_COIN = "ETH"
+LINEAR_SYMBOL = "ETHUSDT"
 
 # Интервалы обновления (секунды)
 REST_POLL_INTERVAL = 3        # опционные тикеры — каждые 3 сек
@@ -22,12 +24,15 @@ KLINE_LIMIT = 60
 TIMEZONE = "Europe/Moscow"
 
 # FastAPI
-API_HOST = "0.0.0.0"
-API_PORT = 8000
-CORS_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+API_HOST = os.environ.get("MOS_BACKEND_HOST", "127.0.0.1")
+API_PORT = int(os.environ.get("MOS_BACKEND_PORT", "8101"))
 
 # Frontend dev server
-FRONTEND_DEV_PORT = 5173
+FRONTEND_DEV_PORT = int(os.environ.get("MOS_FRONTEND_PORT", "5174"))
+CORS_ORIGINS = [
+    f"http://localhost:{FRONTEND_DEV_PORT}",
+    f"http://127.0.0.1:{FRONTEND_DEV_PORT}",
+]
 
 # ── Multi-Exchange Architecture ──────────────────────────────────────
 
@@ -62,14 +67,14 @@ OFFLINE_THRESHOLD_SECONDS = 10  # > 10s stale = OFFLINE / excluded
 # ── Price Source Configuration (MOS Manual) ──────────────────────────────────
 # execution_price: the actual tradable instrument for manual entry / SL / TP / MFE / MAE
 EXECUTION_VENUE  = "bybit_linear"
-EXECUTION_SYMBOL = "BTCUSDT"
+EXECUTION_SYMBOL = "ETHUSDT"
 
-# reference_price: BTC index / spot reference for options structure, gamma/GEX, IV/skew
+# reference_price: ETH index / spot reference for options structure, gamma/GEX, IV/skew
 # Sourced from: Bybit options tickers → underlyingPrice field
 REFERENCE_VENUE  = "bybit_options_index"
-REFERENCE_SYMBOL = "BTCUSD_INDEX"
+REFERENCE_SYMBOL = "ETHUSD_INDEX"
 
 # OHLCV source transparency — v1 uses Binance spot (close to execution but different venue)
-# v1.1 goal: switch to Bybit linear BTCUSDT 1m for exact execution alignment
-OHLCV_SOURCE_LABEL = "binance_spot_btcusdt"   # must be updated when ohlcv_collector changes
+# v1.1 goal: switch to Bybit linear ETHUSDT 1m for exact execution alignment
+OHLCV_SOURCE_LABEL = "binance_spot_ethusdt"   # must be updated when ohlcv_collector changes
 

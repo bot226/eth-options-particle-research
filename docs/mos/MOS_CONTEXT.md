@@ -2,7 +2,7 @@
 
 ## MOS — Institutional Market Structure Intelligence System
 
-MOS is a Market Operating System for BTC options market structure intelligence.
+MOS is a Market Operating System for ETH options market structure intelligence.
 
 MOS does **not** predict price.
 

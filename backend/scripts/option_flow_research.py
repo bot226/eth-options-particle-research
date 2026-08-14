@@ -1,4 +1,4 @@
-"""Frozen statistical foundation for public BTC option trade-flow research.
+"""Frozen statistical foundation for public ETH option trade-flow research.
 
 This module is offline-only. It audits a MOS Dataset Exporter directory or ZIP,
 freezes the protocol hash, and provides leakage-safe walk-forward and
@@ -508,7 +508,7 @@ def audit_dataset(paths: Mapping[str, Path], protocol: Mapping[str, Any]) -> dic
                            MIN(timestamp_utc) AS first_candle_utc,
                            MAX(timestamp_utc) AS last_candle_utc
                     FROM ohlcv_candles
-                    WHERE symbol='BTCUSDT' AND timeframe='1m'
+                    WHERE symbol='ETHUSDT' AND timeframe='1m'
                     """
                 ).fetchone()
             )
@@ -836,7 +836,7 @@ def load_futures_candles(paths: Mapping[str, Path]) -> list[FuturesCandle]:
             """
             SELECT timestamp_utc, high, low, close
             FROM ohlcv_candles
-            WHERE symbol='BTCUSDT' AND timeframe='1m'
+            WHERE symbol='ETHUSDT' AND timeframe='1m'
               AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL
             ORDER BY timestamp_utc
             """
@@ -1451,7 +1451,7 @@ def evaluate_range_rules(
     protocol: Mapping[str, Any],
     decision_contexts: Mapping[float, DecisionContext] | None = None,
 ) -> list[dict[str, Any]]:
-    """Test whether frozen high-flow states predict a larger future BTC range."""
+    """Test whether frozen high-flow states predict a larger future ETH range."""
     grouped: dict[tuple[str, str, str, int, str], list[tuple[float, float]]] = defaultdict(list)
     range_features = set(protocol["range_features"])
     minimum_greek_match = float(protocol.get("minimum_greek_match_ratio", 0.0))

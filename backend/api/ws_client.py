@@ -22,7 +22,7 @@ _MAX_RECONNECT_DELAY = 30  # seconds cap for backoff
 
 
 class BybitWebSocket:
-    """Async WebSocket клиент — два канала: option tickers + linear (BTC spot)."""
+    """Async WebSocket клиент — два канала: option tickers + linear (ETH spot)."""
 
     def __init__(self, on_ticker=None, on_spot=None):
         self._on_ticker = on_ticker    # callback(data: dict)
@@ -34,10 +34,10 @@ class BybitWebSocket:
         self._running = True
         self._tasks = [
             asyncio.create_task(self._run_ws(
-                BYBIT_WS_OPTION_URL, "tickers.BTC", self._handle_option, "option"
+                BYBIT_WS_OPTION_URL, "tickers.ETH", self._handle_option, "option"
             )),
             asyncio.create_task(self._run_ws(
-                BYBIT_WS_LINEAR_URL, "tickers.BTCUSDT", self._handle_linear, "linear"
+                BYBIT_WS_LINEAR_URL, "tickers.ETHUSDT", self._handle_linear, "linear"
             )),
         ]
         log.info("WebSocket tasks started")

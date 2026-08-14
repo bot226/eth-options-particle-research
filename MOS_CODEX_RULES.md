@@ -165,7 +165,7 @@ Codex должен определить, какой version file реально 
 Первый запрос Codex должен быть READ-ONLY.
 
 ```text
-Ты работаешь с проектом MOS — Institutional Market Structure Intelligence System для BTC options.
+Ты работаешь с проектом MOS — Institutional Market Structure Intelligence System для ETH options.
 
 Сейчас ничего не изменяй.
 
@@ -596,10 +596,10 @@ Project remote rule:
 
 ```text
 For this MOS project, push only to:
-https://github.com/eunjuamacher-lang/btc-gpt
+https://github.com/eunjuamacher-lang/eth-gpt
 
 Do not push this project to any other GitHub repository or remote.
-Before pushing, verify that origin fetch/push points to eunjuamacher-lang/btc-gpt.
+Before pushing, verify that origin fetch/push points to eunjuamacher-lang/eth-gpt.
 ```
 
 Правило:

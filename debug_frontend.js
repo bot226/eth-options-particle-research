@@ -16,7 +16,7 @@ const puppeteer = require('puppeteer');
         console.error('BROWSER PAGE ERROR:', err.toString());
     });
 
-    await page.goto('http://localhost:5173/research', { waitUntil: 'networkidle0' });
+    await page.goto('http://localhost:5174/research', { waitUntil: 'networkidle0' });
     
     // wait for 2 seconds to allow charts to render
     await new Promise(r => setTimeout(r, 2000));

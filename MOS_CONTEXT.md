@@ -4,7 +4,7 @@
 
 ## 1. Что такое MOS
 
-MOS — Market Operating System для анализа структуры рынка BTC options.
+MOS — Market Operating System для анализа структуры рынка ETH options.
 
 MOS не предсказывает цену. MOS анализирует рыночную структуру: текущее состояние рынка, режим, переход режима, дилерское позиционирование, Gamma / GEX, IV / skew / term structure, ликвидность, synthetic flow pressure, вероятность расширения диапазона, качество среды для исполнения, события для replay, future_labels и основу для будущего Market Memory.
 
@@ -377,7 +377,7 @@ INTELLIGENCE BELOW
 Основные слои:
 
 ```text
-BTC Price Chart
+ETH Price Chart
 Expansion Probability
 Gamma Slope
 Liquidity Void Score

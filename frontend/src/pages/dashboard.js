@@ -263,8 +263,8 @@ export class DashboardPage {
       const g = ms.gamma;
       const netGexColor = g.metrics.net_gex > 0 ? 'text-green' : 'text-red';
       gammaBody.innerHTML = `
-        <div class="mos-metric"><span class="label">ЧИСТЫЙ GEX:</span> <span class="val ${netGexColor}">${this.fmtNum(g.metrics.net_gex)} BTC</span></div>
-        <div class="mos-metric"><span class="label">GEX ОКОЛО СПОТА:</span> <span class="val">${this.fmtNum(g.metrics.near_spot_gex)} BTC</span></div>
+        <div class="mos-metric"><span class="label">ЧИСТЫЙ GEX:</span> <span class="val ${netGexColor}">${this.fmtNum(g.metrics.net_gex)} ETH</span></div>
+        <div class="mos-metric"><span class="label">GEX ОКОЛО СПОТА:</span> <span class="val">${this.fmtNum(g.metrics.near_spot_gex)} ETH</span></div>
         <div class="mos-metric-separator"></div>
         <div class="mos-metric"><span class="label">GAMMA FLIP:</span> <span class="val highlight text-orange">$${this.fmtNum(g.metrics.gamma_flip)}</span></div>
         <div class="mos-metric"><span class="label">CALL WALL:</span> <span class="val text-green">$${this.fmtNum(g.metrics.call_wall)}</span></div>
@@ -373,7 +373,7 @@ export class DashboardPage {
       const liqLabel = liquidityStateLabels[l.signals.liquidity_state] || l.signals.liquidity_state;
 
       liqBody.innerHTML = `
-        <div class="mos-metric"><span class="label">ОБЩИЙ OI:</span> <span class="val text-bright">${this.fmtNum(l.metrics.total_oi)} BTC</span></div>
+        <div class="mos-metric"><span class="label">ОБЩИЙ OI:</span> <span class="val text-bright">${this.fmtNum(l.metrics.total_oi)} ETH</span></div>
         <div class="mos-metric"><span class="label">P/C RATIO:</span> <span class="val">${this.fmtNum(l.metrics.put_call_ratio)}</span></div>
         <div class="mos-metric"><span class="label">ЛИКВИДНОСТЬ:</span> <span class="val">${liqLabel}</span></div>
         <div class="mos-metric-separator"></div>
@@ -465,7 +465,7 @@ export class DashboardPage {
         </div>
       </div>
       <div class="manual-decision-details">
-        <div class="mos-metric"><span class="label">invalidation_level:</span> <span class="val">${this.fmtBTC(manual.invalidation_level)}</span></div>
+        <div class="mos-metric"><span class="label">invalidation_level:</span> <span class="val">${this.fmtETH(manual.invalidation_level)}</span></div>
         <div class="mos-metric"><span class="label">avoid_reason:</span> <span class="val">${this.esc(manual.avoid_reason || '—')}</span></div>
       </div>
       ${this._renderMissingConditionsBlock(manual.missing_conditions)}
@@ -556,15 +556,15 @@ export class DashboardPage {
           <td><span class="manual-table-pill ${this._manualBiasClass(row.manual_bias)}">${this.esc(row.manual_bias || '—')}</span></td>
           <td><span class="manual-table-pill ${this._manualQualityClass(row.setup_quality)}">${this.esc(row.setup_quality || '—')}</span></td>
           <td class="manual-watchlist-missing" title="${this.esc(missingFull)}">${this.esc(missingCompact)}</td>
-          <td class="manual-watchlist-price">${this.fmtBTC(row.price)}</td>
-          <td class="manual-watchlist-price">${this.fmtBTC(row.nearest_level)}</td>
+          <td class="manual-watchlist-price">${this.fmtETH(row.price)}</td>
+          <td class="manual-watchlist-price">${this.fmtETH(row.nearest_level)}</td>
           <td>${this.esc(row.current_state || '—')}</td>
           <td>${this.esc(row.execution_timing_state || '—')}</td>
           <td>${this.esc(row.event_type || '—')}</td>
           <td>${this.esc(row.level_result || '—')}</td>
           <td>${this.esc(row.short_term_flow_direction || '—')}</td>
           <td class="manual-watchlist-long">${this.esc(row.confirmation_needed || '—')}</td>
-          <td class="manual-watchlist-price">${this.fmtBTC(row.invalidation_level)}</td>
+          <td class="manual-watchlist-price">${this.fmtETH(row.invalidation_level)}</td>
         </tr>
       `;
     }).join('');
@@ -627,7 +627,7 @@ export class DashboardPage {
     `;
   }
 
-  fmtBTC(val) {
+  fmtETH(val) {
     if (val == null || val === '') return '—';
     const num = Number(val);
     if (Number.isNaN(num)) return this.esc(String(val));

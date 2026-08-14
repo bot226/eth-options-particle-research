@@ -1,6 +1,23 @@
 # MOS_CURRENT_STATE.md
 
-## Current stable backend state
+## ETH fork current state
+
+This repository is an independent ETH runtime fork of BTC v70 commit
+`424c5692be09bd8693b41acbc65127d20f69cbb1`. It uses ETH-only exchange
+symbols and channels, frontend port `5174`, backend port `8101`, and its own
+project-local databases. No BTC database was migrated.
+
+```python
+CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
+RESEARCH_SCHEMA_VERSION = "2.0"
+ENGINE_PATCH_VERSION = "v1_eth_asset_runtime_isolation"
+PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
+```
+
+The analytical formulas and thresholds are inherited unchanged. They have not
+yet been validated on ETH and must not be treated as proven ETH trading logic.
+
+## Upstream BTC v70 baseline
 
 Current development branch version:
 

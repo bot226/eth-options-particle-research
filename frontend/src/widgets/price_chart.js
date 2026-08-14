@@ -1,5 +1,5 @@
 /**
- * Panel 7: BTC Price Chart + GEX Sidebar + OI Levels.
+ * Panel 7: ETH Price Chart + GEX Sidebar + OI Levels.
  * Uses Lightweight Charts for candlestick.
  */
 import { createChart, CandlestickSeries, LineSeries } from 'lightweight-charts';

@@ -1,5 +1,8 @@
 # MOS_DATA_VALIDATION_CRITERIA.md
 
+> ETH fork note: the runtime checks below are adapted from BTC v70. Passing
+> them proves collection and isolation, not predictive validity on ETH.
+
 ## Goal
 
 Validate whether `mos_research.db` and `history.db` are usable for replay analysis, signal checking, probabilistic analysis and future Market Memory Engine.
@@ -639,7 +642,7 @@ GROUP BY exchange, symbol, timeframe;
 Expected:
 
 ```text
-binance / BTCUSDT / 1m
+binance / ETHUSDT / 1m
 gap around 60 sec
 ```
 

@@ -787,7 +787,7 @@ def _build_manual_trading_payload(market_state):
         )
 
         if is_valid_candidate:
-            symbol = market_state.get("symbol") or "BTCUSD"
+            symbol = market_state.get("symbol") or "ETHUSD"
             try:
                 l_val = round(float(level) / 10.0) * 10
                 i_val = round(float(inv_level) / 10.0) * 10
@@ -881,7 +881,7 @@ def _build_manual_trading_payload(market_state):
         )
 
         if is_forming_setup and bool(setup_type) and bias in ("LONG", "SHORT") and bool(side) and level is not None and inv_level is not None:
-            symbol = market_state.get("symbol") or "BTCUSD"
+            symbol = market_state.get("symbol") or "ETHUSD"
             try:
                 l_val = round(float(level) / 10.0) * 10
                 i_val = round(float(inv_level) / 10.0) * 10
@@ -1370,7 +1370,7 @@ def _build_manual_trading_payload(market_state):
 
         # OVERRIDE FOR FIX
         if (ps_dict.get("ohlcv_exchange") == "bybit" and
-            ps_dict.get("ohlcv_source") == "bybit_linear_btcusdt" and
+            ps_dict.get("ohlcv_source") == "bybit_linear_ethusdt" and
             ps_dict.get("execution_price_ohlcv_sync_status") == "OK"):
             ps_dict["candle_source_verified"] = 1
 
@@ -2174,7 +2174,7 @@ async def get_manual_trading_logging_status():
 
 @router.get("/kline")
 async def get_kline():
-    """Свечные данные BTCUSDT."""
+    """Свечные данные ETHUSDT."""
     if _dm is None:
         return {"klines": []}
     return {"klines": _dm.klines}
@@ -2182,7 +2182,7 @@ async def get_kline():
 
 @router.get("/manual-trading/kline")
 async def get_manual_trading_kline():
-    """1m свечи BTCUSDT для Manual Trading чарта — приоритет локальной БД."""
+    """1m свечи ETHUSDT для Manual Trading чарта — приоритет локальной БД."""
     EMPTY = {"status": "DEGRADED", "candles": [], "error_reason": "NO_KLINE_DATA"}
 
     # Попытка получить свечи из локальной БД (быстро, без rate limit и таймаутов)
@@ -2247,7 +2247,7 @@ async def get_manual_trading_kline():
             async with _httpx.AsyncClient(timeout=10) as cl:
                 r = await cl.get(
                     "https://api.bybit.com/v5/market/kline",
-                    params={"category": "linear", "symbol": "BTCUSDT",
+                    params={"category": "linear", "symbol": "ETHUSDT",
                             "interval": "1", "limit": "120"},
                 )
                 data = r.json()

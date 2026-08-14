@@ -77,8 +77,8 @@ class ParticleShadowReplayTest(unittest.TestCase):
                 call_oi = 100.0 + index * 10.0
                 put_oi = 80.0 + index * 2.0
                 oi = {} if index == 4 else {
-                    "BTC-20260814-100-C": call_oi,
-                    "BTC-20260814-90-P": put_oi,
+                    "ETH-20260814-100-C": call_oi,
+                    "ETH-20260814-90-P": put_oi,
                 }
                 gex = {
                     "data": [
@@ -113,8 +113,8 @@ class ParticleShadowReplayTest(unittest.TestCase):
                     (index, timestamp, json.dumps(oi), json.dumps(gex), json.dumps(term)),
                 )
                 for contract_id, strike, option_type, contract_oi in (
-                    ("BTC-20260814-100-C", 100.0, "C", call_oi),
-                    ("BTC-20260814-90-P", 90.0, "P", put_oi),
+                    ("ETH-20260814-100-C", 100.0, "C", call_oi),
+                    ("ETH-20260814-90-P", 90.0, "P", put_oi),
                 ):
                     connection.execute(
                         """
@@ -209,7 +209,7 @@ class ParticleShadowReplayTest(unittest.TestCase):
             for timestamp in range(900, 2_000, 60):
                 close = 100.0 + (timestamp - 900) / 10_000.0
                 connection.execute(
-                    "INSERT INTO ohlcv_candles VALUES (?, ?, ?, ?, ?, 'bybit', 'BTCUSDT', '1m', 'test', 1)",
+                    "INSERT INTO ohlcv_candles VALUES (?, ?, ?, ?, ?, 'bybit', 'ETHUSDT', '1m', 'test', 1)",
                     (timestamp, close, close + 0.1, close - 0.1, close),
                 )
             connection.commit()
@@ -217,8 +217,8 @@ class ParticleShadowReplayTest(unittest.TestCase):
             connection.close()
 
     def test_parses_bybit_and_deribit_contract_names(self):
-        bybit = parse_contract("BTC-20260814-62500-C")
-        deribit = parse_contract("BTC-31JUL26-120000-P")
+        bybit = parse_contract("ETH-20260814-62500-C")
+        deribit = parse_contract("ETH-31JUL26-120000-P")
         self.assertEqual((bybit.expiry, bybit.strike, bybit.option_type), ("20260814", 62500.0, "C"))
         self.assertEqual((deribit.expiry, deribit.strike, deribit.option_type), ("31JUL26", 120000.0, "P"))
         self.assertIsNone(parse_contract("invalid"))
@@ -382,10 +382,10 @@ class HistoryContractSnapshotTest(unittest.TestCase):
         self.addCleanup(history.close)
         snapshot_id = history.save_snapshot(
             ts=1_000.0,
-            oi_data={"BTC-20260814-100-C": 12.0},
+            oi_data={"ETH-20260814-100-C": 12.0},
             contract_data={
-                "BTC-20260814-100-C": {
-                    "symbol": "BTC-20260814-100-C",
+                "ETH-20260814-100-C": {
+                    "symbol": "ETH-20260814-100-C",
                     "expiry": "20260814",
                     "strike": 100,
                     "type": "C",
@@ -411,7 +411,7 @@ class HistoryContractSnapshotTest(unittest.TestCase):
                 FROM option_contract_snapshots
                 """
             ).fetchone()
-            self.assertEqual(row[:2], ("bybit", "BTC-20260814-100-C"))
+            self.assertEqual(row[:2], ("bybit", "ETH-20260814-100-C"))
             self.assertEqual(row[2:], (12.0, 7.0, 0.31, 0.51, 0.01, 0.2, -0.1))
         finally:
             connection.close()

@@ -50,7 +50,7 @@ def parse_resolution(res_str: str) -> Optional[int]:
 def get_ohlcv_context(cursor, to_ts: Optional[float] = None) -> dict:
     """Return read-only OHLCV context for validation, not live scoring."""
     if not to_ts:
-        cursor.execute("SELECT MAX(timestamp_utc) FROM ohlcv_candles WHERE symbol='BTCUSDT' AND timeframe='1m'")
+        cursor.execute("SELECT MAX(timestamp_utc) FROM ohlcv_candles WHERE symbol='ETHUSDT' AND timeframe='1m'")
         row = cursor.fetchone()
         to_ts = row[0] if row and row[0] else None
     if not to_ts:
@@ -63,7 +63,7 @@ def get_ohlcv_context(cursor, to_ts: Optional[float] = None) -> dict:
     cursor.execute("""
         SELECT timestamp_utc, open, high, low, close, volume
         FROM ohlcv_candles
-        WHERE symbol = 'BTCUSDT'
+        WHERE symbol = 'ETHUSDT'
           AND timeframe = '1m'
           AND timestamp_utc BETWEEN ? AND ?
         ORDER BY timestamp_utc ASC
@@ -97,7 +97,7 @@ def get_ohlcv_context(cursor, to_ts: Optional[float] = None) -> dict:
     return {
         "available": True,
         "source": "ohlcv_candles",
-        "symbol": "BTCUSDT",
+        "symbol": "ETHUSDT",
         "timeframe": "1m",
         "from": rows[0]["timestamp_utc"],
         "to": rows[-1]["timestamp_utc"],
@@ -118,7 +118,7 @@ def get_short_term_flow_context(cursor, to_ts: Optional[float] = None, spot_pric
         row = cursor.fetchone()
         to_ts = row[0] if row and row[0] else None
     if not to_ts:
-        cursor.execute("SELECT MAX(timestamp_utc) FROM ohlcv_candles WHERE symbol='BTCUSDT' AND timeframe='1m'")
+        cursor.execute("SELECT MAX(timestamp_utc) FROM ohlcv_candles WHERE symbol='ETHUSDT' AND timeframe='1m'")
         row = cursor.fetchone()
         to_ts = row[0] if row and row[0] else time.time()
 
@@ -138,7 +138,7 @@ def get_short_term_flow_context(cursor, to_ts: Optional[float] = None, spot_pric
     cursor.execute("""
         SELECT timestamp_utc, open, high, low, close, volume
         FROM ohlcv_candles
-        WHERE symbol = 'BTCUSDT'
+        WHERE symbol = 'ETHUSDT'
           AND timeframe = '1m'
           AND timestamp_utc BETWEEN ? AND ?
         ORDER BY timestamp_utc ASC
@@ -259,7 +259,7 @@ def _load_snapshot_rows(cursor, from_ts: Optional[float], to_ts: Optional[float]
 
 def _load_ohlcv_rows(cursor, from_ts: Optional[float], to_ts: Optional[float]) -> List[dict]:
     if not to_ts:
-        cursor.execute("SELECT MAX(timestamp_utc) FROM ohlcv_candles WHERE symbol='BTCUSDT' AND timeframe='1m'")
+        cursor.execute("SELECT MAX(timestamp_utc) FROM ohlcv_candles WHERE symbol='ETHUSDT' AND timeframe='1m'")
         row = cursor.fetchone()
         to_ts = row[0] if row and row[0] else time.time()
     if not from_ts:
@@ -270,7 +270,7 @@ def _load_ohlcv_rows(cursor, from_ts: Optional[float], to_ts: Optional[float]) -
                close, volume, quote_volume, trade_count, source_latency_ms,
                created_at_utc
         FROM ohlcv_candles
-        WHERE symbol = 'BTCUSDT'
+        WHERE symbol = 'ETHUSDT'
           AND timeframe = '1m'
           AND timestamp_utc BETWEEN ? AND ?
         ORDER BY timestamp_utc ASC
@@ -733,7 +733,7 @@ async def get_diagnostics():
 
 @router.get("/ohlcv")
 async def get_ohlcv(
-    symbol: str = Query("BTCUSDT"),
+    symbol: str = Query("ETHUSDT"),
     timeframe: str = Query("1m"),
     from_ts: Optional[float] = Query(None, alias="from"),
     to_ts: Optional[float] = Query(None, alias="to"),

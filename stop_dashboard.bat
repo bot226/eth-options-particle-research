@@ -1,16 +1,31 @@
 @echo off
-title BTC Options Dashboard - Shutdown
-echo =================================================================
-echo     ОСТАНОВКА ФОНОВЫХ ПРОЦЕССОВ ДАШБОРДА
-echo =================================================================
-echo.
+setlocal
+title ETH Options Dashboard - Shutdown
+cd /d "%~dp0"
 
-echo [SYSTEM] Завершение процессов Python (бэкенд)...
-taskkill /F /IM python.exe /T >nul 2>&1
+if not exist ".runtime\eth-stack.json" (
+    echo [ETH] No active ETH stack PID file was found.
+    echo [ETH] BTC and all unrelated Python/Node processes were left untouched.
+    pause
+    exit /b 0
+)
 
-echo [SYSTEM] Завершение процессов Node.js (фронтенд)...
-taskkill /F /IM node.exe /T >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$meta = Get-Content -Raw '.runtime\eth-stack.json' | ConvertFrom-Json;" ^
+  "$process = Get-Process -Id $meta.orchestrator_pid -ErrorAction SilentlyContinue;" ^
+  "if (-not $process) { Remove-Item -LiteralPath '.runtime\eth-stack.json' -Force; exit 0 };" ^
+  "$started = [DateTimeOffset]$process.StartTime;" ^
+  "$delta = [Math]::Abs($started.ToUnixTimeSeconds() - [int64]$meta.started_at);" ^
+  "if ($delta -gt 10) { Write-Error 'Refusing to stop a reused PID.'; exit 2 };" ^
+  "taskkill /PID $meta.orchestrator_pid /T /F | Out-Null;" ^
+  "Remove-Item -LiteralPath '.runtime\eth-stack.json' -Force -ErrorAction SilentlyContinue"
 
-echo.
-echo [OK] Все процессы успешно остановлены.
+if errorlevel 1 (
+    echo [ETH] Could not safely stop the ETH stack.
+    pause
+    exit /b 1
+)
+
+echo [ETH] ETH backend, frontend and workers stopped.
+echo [ETH] BTC and unrelated processes were not touched.
 pause

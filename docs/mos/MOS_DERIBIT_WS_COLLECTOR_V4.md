@@ -1,5 +1,9 @@
 # MOS Deribit WebSocket Option Ticker Collector v4-v14
 
+> ETH fork note: the runtime uses ETH instruments and `eth_usd`. Historical
+> instrument counts in this document are upstream BTC v70 evidence and are not
+> expected to match the ETH chain size.
+
 ## Why it exists
 
 On the collector host, Deribit `get_instruments` returned 866 BTC option
@@ -56,7 +60,7 @@ underlying and option prices, plus nested delta, gamma, vega, and theta.
 Open:
 
 ```text
-http://localhost:8005/api/research/deribit-smoke-test
+http://localhost:8101/api/research/deribit-smoke-test
 ```
 
 The response should show `status: ok`, positive ticker and Greek counts, and

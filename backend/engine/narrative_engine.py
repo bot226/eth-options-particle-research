@@ -188,7 +188,7 @@ class NarrativeEngine:
             elif gamma_regime == "POSITIVE_GAMMA" and iv_regime in ["COMPRESSION", "NORMAL"]:
                 summary_lines.append("Дилеры сохраняют контроль над рынком. Положительная гамма сглаживает колебания цен.")
                 if pinning in ["HIGH", "MEDIUM"]:
-                    summary_lines.append(f"Цена BTC удерживается (пиннинг) вблизи крупной концентрации открытого интереса.")
+                    summary_lines.append(f"Цена ETH удерживается (пиннинг) вблизи крупной концентрации открытого интереса.")
 
             # Rule 3: Negative gamma + expansion
             elif gamma_regime == "NEGATIVE_GAMMA" and iv_regime in ["EXPANSION", "VOL EXPANSION", "ELEVATED"]:
