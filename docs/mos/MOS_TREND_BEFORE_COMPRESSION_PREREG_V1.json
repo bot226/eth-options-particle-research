@@ -1,0 +1,102 @@
+{
+  "protocol": "mos_eth_trend_before_compression_preregister_v1",
+  "hypothesis_id": "ETH-H7",
+  "result_id_prefix": "ETH-H7",
+  "frozen_at_utc": "2026-08-15T18:19:19.565Z",
+  "eligible_data_after_utc": "2026-08-15T18:19:19.565Z",
+  "asset": "ETHUSDT",
+  "asset_scope": "ETH",
+  "purpose": "Test whether preceding ETH futures trend quality conditions the direction of an ETH option-identified range expansion without changing MOS live logic",
+  "research_only": true,
+  "live_entry_changes_allowed": false,
+  "evidence_isolation": {
+    "confirmation_asset": "ETH",
+    "eligible_databases": "ETH project databases only",
+    "btc_and_sol_evidence_role": "context_only_not_confirmation",
+    "cross_asset_database_merge_allowed": false,
+    "cross_asset_threshold_transfer_allowed": false,
+    "correlated_asset_periods_count_as_independent": false
+  },
+  "decision_interval_sec": 300,
+  "option_readiness_events": [
+    "particle_shadow_v3_new_VOLATILITY_WITHOUT_DIRECTION_episode",
+    "strict_compression_or_pinning_control"
+  ],
+  "compression_control": {
+    "states": ["COMPRESSION", "PINNING"],
+    "lookback_sec": 1800,
+    "minimum_state_coverage_ratio": 0.8
+  },
+  "trend_lookbacks_sec": [3600, 14400],
+  "trend_features": [
+    "past_log_return",
+    "path_efficiency_ratio",
+    "signed_ols_slope_t_stat",
+    "realized_range_normalized_return",
+    "distance_from_trailing_vwap",
+    "return_slope_alignment"
+  ],
+  "threshold_rule": "thresholds_are_estimated_from_prior_complete_ETH_UTC_days_only",
+  "trend_quantiles": [0.6, 0.8],
+  "direction_modes": [
+    "continuation_of_precompression_trend",
+    "reversal_of_precompression_trend"
+  ],
+  "neutral_control": "no_direction_when_60m_and_240m_trend_signs_disagree",
+  "outcome_horizons_sec": [900, 1800, 3600, 7200],
+  "futures_round_trip_cost_bps": [6, 10, 15],
+  "execution_delays_sec": [0, 15, 60],
+  "minimum_total_days": 28,
+  "minimum_training_days": 14,
+  "minimum_test_days": 14,
+  "minimum_independent_events": 100,
+  "minimum_events_per_direction": 30,
+  "minimum_positive_week_ratio": 0.6,
+  "minimum_complete_weeks": 4,
+  "event_deduplication_sec": 3600,
+  "minimum_ohlcv_path_coverage_ratio": 0.95,
+  "mos_context_max_age_sec": 120,
+  "option_snapshot_max_age_sec": 600,
+  "minimum_trade_greek_match_ratio": 0.8,
+  "minimum_same_contract_overlap_ratio": 0.95,
+  "validation": {
+    "split": "expanding_ETH_UTC_day_walk_forward",
+    "confidence_blocks": "ETH_UTC_day_and_week",
+    "bootstrap_samples": 5000,
+    "permutation_samples": 5000,
+    "random_seed": 226
+  },
+  "multiple_testing_family": {
+    "members": "all_ETH_event_sources_x_trend_lookbacks_x_trend_quantiles_x_direction_modes_x_outcome_horizons_x_execution_delays",
+    "holm_alpha": 0.05,
+    "shared_week_sign_flip_max_t_alpha": 0.05
+  },
+  "benchmarks": [
+    "same_timestamp_ETH_price_continuation",
+    "same_timestamp_ETH_price_reversal",
+    "same_timestamp_ETH_unconditional_direction",
+    "matched_random_ETH_compression_timestamps",
+    "ETH_option_readiness_without_trend_condition"
+  ],
+  "promotion_gate": {
+    "positive_mean_at_every_cost": true,
+    "positive_week_block_95pct_lower_bound_at_15bps": true,
+    "holm_adjusted_p_below": 0.05,
+    "max_t_adjusted_p_below": 0.05,
+    "beats_same_timestamp_continuation_and_reversal": true,
+    "stable_sign_across_early_and_late_test_halves": true,
+    "requires_valid_option_quality_gate": true,
+    "requires_explicit_owner_approval_for_any_promotion": true,
+    "live_entry_changes_allowed": false
+  },
+  "anti_leakage": [
+    "Only ETH events strictly after eligible_data_after_utc enter confirmation",
+    "All ETH trend features end at or before the decision timestamp",
+    "Option Greeks use only the latest earlier snapshot of the same ETH contract on the same exchange",
+    "Thresholds use prior complete ETH UTC days only",
+    "Outcomes for the same rule are non-overlapping",
+    "The complete declared ETH variant family is included in multiple-testing correction",
+    "Discovery ETH data through the freeze timestamp can never be reported as confirmation",
+    "BTC and SOL observations, thresholds and results can never enter ETH confirmation"
+  ]
+}

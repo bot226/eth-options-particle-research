@@ -7,6 +7,9 @@ Do not rely on chat memory.
 Always read:
 
 - `AGENTS.md`
+- `/docs/mos/MOS_RESEARCH_CHARTER.md`
+- `/docs/mos/MOS_HYPOTHESIS_REGISTRY.md`
+- `/docs/mos/MOS_TREND_BEFORE_COMPRESSION_PREREG_V1.json`
 - `/docs/mos/MOS_CONTEXT.md`
 - `/docs/mos/MOS_CURRENT_STATE.md`
 - `/docs/mos/MOS_DATA_VALIDATION_CRITERIA.md`
@@ -31,6 +34,22 @@ Do not lower thresholds to make signals appear.
 Do not create artificial events.
 
 Do not tune system to one quiet or one active market sample.
+
+## Permanent ETH research governance
+
+- Use only ETH-prefixed hypothesis/result IDs for this repository.
+- Keep ETH, BTC and SOL databases, thresholds, cutoffs and evidence separate.
+- BTC/SOL findings may motivate an ETH hypothesis but cannot confirm it.
+- Separate movement readiness/range from direction.
+- Separate discovery, freeze, confirmation and promotion.
+- Require causal same-contract joins, chronological splits, non-overlapping
+  outcomes, day/week blocks, negative controls, full multiple-testing
+  correction, 6/10/15 bps costs and latency stress.
+- Retain negative, weakened, sign-reversed and technically blocked results.
+- Do not reset a clean database to adopt a new freeze. Data at or before the
+  cutoff remains discovery/baseline; only later data is eligible confirmation.
+- Never promote research into live-entry behavior without a separate reviewed
+  version and explicit owner approval.
 
 After completing code or documentation changes, commit and push the finished work
 to the current working branch unless the user explicitly asks not to push.

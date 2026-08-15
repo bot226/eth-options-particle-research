@@ -4,11 +4,14 @@ This repository contains **MOS — Institutional Market Structure Intelligence S
 
 Before making any code changes, always read:
 
-1. `/docs/mos/MOS_CONTEXT.md`
-2. `/docs/mos/MOS_CURRENT_STATE.md`
-3. `/docs/mos/MOS_DATA_VALIDATION_CRITERIA.md`
-4. `/docs/mos/MOS_CODEX_RULES.md`
-5. `/docs/mos/MOS_NEXT_TASK.md`
+1. `/docs/mos/MOS_RESEARCH_CHARTER.md`
+2. `/docs/mos/MOS_HYPOTHESIS_REGISTRY.md`
+3. `/docs/mos/MOS_TREND_BEFORE_COMPRESSION_PREREG_V1.json`
+4. `/docs/mos/MOS_CONTEXT.md`
+5. `/docs/mos/MOS_CURRENT_STATE.md`
+6. `/docs/mos/MOS_DATA_VALIDATION_CRITERIA.md`
+7. `/docs/mos/MOS_CODEX_RULES.md`
+8. `/docs/mos/MOS_NEXT_TASK.md`
 
 ## Core philosophy
 
@@ -17,6 +20,17 @@ MOS does **not** predict price.
 MOS analyzes market structure, regime, dealer positioning, Gamma/GEX, IV/skew/term structure, liquidity, synthetic flow pressure, regime transition probability, execution environment quality, replay data, and future Market Memory.
 
 Do **not** turn MOS into a buy/sell signal dashboard.
+
+## Permanent ETH research governance
+
+- The Research Charter is mandatory and survives individual tasks.
+- Hypothesis IDs, cutoffs, datasets and results are ETH-specific.
+- BTC/SOL results are context only and never confirm an ETH hypothesis.
+- Discovery, freeze, confirmation and promotion are separate stages.
+- Negative, weakened, sign-reversed and technically blocked results remain in
+  the Hypothesis Registry.
+- No research result changes live-entry logic without a separately reviewed
+  version and explicit owner approval.
 
 ## Architecture rules
 
