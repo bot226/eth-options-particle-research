@@ -8,6 +8,7 @@ for backward compatibility with all existing engine modules.
 import time
 import asyncio
 import logging
+import math
 from collections import defaultdict
 from typing import Optional
 
@@ -28,6 +29,21 @@ def _safe_float(val, default=0.0):
         return float(val)
     except (TypeError, ValueError):
         return default
+
+
+def _has_complete_surface_metrics(ticker: dict) -> bool:
+    """Validate strict IV/Greek fields without changing live aggregation."""
+    try:
+        mark_iv = float(ticker.get("markIv"))
+        greeks = [
+            float(ticker.get(metric))
+            for metric in ("delta", "gamma", "vega", "theta")
+        ]
+    except (TypeError, ValueError):
+        return False
+    return mark_iv > 0 and math.isfinite(mark_iv) and all(
+        math.isfinite(value) for value in greeks
+    )
 
 
 class MultiExchangeDataManager:
@@ -418,6 +434,60 @@ class MultiExchangeDataManager:
         cutoff = time.time() - (25 * 3600)
         self.oi_history = self.history_db.get_all_snapshots_since(cutoff)
 
+    def _stable_surface_history_payload(self):
+        """Build the additive Deribit research panel from normalized tickers."""
+        adapter = self.adapters.get("deribit")
+        if adapter is None or not hasattr(adapter, "get_stable_surface_snapshot"):
+            return None
+        surface = dict(adapter.get_stable_surface_snapshot())
+        target_count = int(surface.get("target_contracts") or 0)
+        target_symbols = list(surface.get("target_contract_names") or [])
+        normalized_by_symbol = {
+            str(ticker.get("symbol") or ""): ticker
+            for ticker in self.per_exchange_tickers.get("deribit", [])
+            if (
+                isinstance(ticker, dict)
+                and ticker.get("symbol")
+                and _has_complete_surface_metrics(ticker)
+            )
+        }
+        contract_data = [
+            normalized_by_symbol[symbol]
+            for symbol in target_symbols
+            if symbol in normalized_by_symbol
+        ]
+        normalized_count = len(contract_data)
+        normalized_coverage = (
+            normalized_count / target_count
+            if target_count > 0
+            else 0.0
+        )
+        source_fresh_count = int(surface.get("fresh_contracts") or 0)
+        source_coverage = float(surface.get("coverage_ratio") or 0.0)
+        surface["fresh_contracts"] = min(
+            source_fresh_count,
+            normalized_count,
+        )
+        surface["coverage_ratio"] = min(
+            source_coverage,
+            normalized_coverage,
+        )
+        minimum_coverage = float(surface.get("minimum_coverage_ratio") or 0.95)
+        if (
+            not surface.get("snapshot_valid")
+            or surface["coverage_ratio"] < minimum_coverage
+        ):
+            surface["snapshot_valid"] = False
+            if not surface.get("invalid_reason"):
+                surface["invalid_reason"] = (
+                    "normalized_coverage_below_95pct"
+                    if target_count > 0
+                    else "universe_not_initialized"
+                )
+            contract_data = []
+        surface["contract_data"] = contract_data
+        return surface
+
     def _update_history(self):
         now = time.time()
         # Сохраняем слепок каждые 5 минут (300 сек)
@@ -452,6 +522,7 @@ class MultiExchangeDataManager:
                     observation = dict(ticker)
                     observation.setdefault("exchange", exchange)
                     contract_observations.append(observation)
+            stable_surface_data = self._stable_surface_history_payload()
             
             # Save to SQLite
             self.history_db.save_snapshot(
@@ -461,6 +532,7 @@ class MultiExchangeDataManager:
                 gex_data=snapshot_gex,
                 term_data=snapshot_ts,
                 contract_data=contract_observations,
+                stable_surface_data=stable_surface_data,
             )
             
             self.oi_history.append({

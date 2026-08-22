@@ -486,6 +486,19 @@ async def get_diagnostics():
     latest_debug_snapshot_ts = None
     short_term_flow_enabled = True
     latest_short_term_flow_context = {}
+    stable_surface_runtime = None
+    try:
+        if _dm is not None and hasattr(_dm, "adapters"):
+            deribit_adapter = _dm.adapters.get("deribit")
+            if deribit_adapter is not None and hasattr(
+                deribit_adapter,
+                "get_stable_surface_snapshot",
+            ):
+                stable_surface_runtime = (
+                    deribit_adapter.get_stable_surface_snapshot()
+                )
+    except Exception:
+        stable_surface_runtime = None
     
     # Get schema validation from ResearchLogger
     try:
@@ -623,6 +636,11 @@ async def get_diagnostics():
         "option_contract_rows": 0,
         "option_contract_latest_ts": None,
         "option_contract_exchange_coverage": [],
+        "stable_surface_universes": 0,
+        "stable_surface_snapshots": 0,
+        "stable_surface_valid_snapshots": 0,
+        "stable_surface_contract_rows": 0,
+        "stable_surface_latest": None,
     }
     try:
         import sqlite3
@@ -673,6 +691,54 @@ async def get_diagnostics():
                 ]
             except Exception:
                 pass
+            try:
+                hcursor.execute("SELECT COUNT(*) FROM option_surface_universes")
+                history_db_info["stable_surface_universes"] = (
+                    hcursor.fetchone()[0] or 0
+                )
+                hcursor.execute(
+                    """
+                    SELECT COUNT(*), SUM(snapshot_valid)
+                    FROM option_surface_snapshots
+                    """
+                )
+                surface_counts = hcursor.fetchone()
+                history_db_info["stable_surface_snapshots"] = (
+                    surface_counts[0] or 0
+                )
+                history_db_info["stable_surface_valid_snapshots"] = (
+                    surface_counts[1] or 0
+                )
+                hcursor.execute(
+                    "SELECT COUNT(*) FROM option_surface_contract_snapshots"
+                )
+                history_db_info["stable_surface_contract_rows"] = (
+                    hcursor.fetchone()[0] or 0
+                )
+                hcursor.execute(
+                    """
+                    SELECT ts, universe_id, target_contracts, fresh_contracts,
+                           coverage_ratio, universe_age_sec, snapshot_valid,
+                           invalid_reason
+                    FROM option_surface_snapshots
+                    ORDER BY ts DESC
+                    LIMIT 1
+                    """
+                )
+                latest_surface = hcursor.fetchone()
+                if latest_surface:
+                    history_db_info["stable_surface_latest"] = {
+                        "ts": latest_surface[0],
+                        "universe_id": latest_surface[1],
+                        "target_contracts": latest_surface[2],
+                        "fresh_contracts": latest_surface[3],
+                        "coverage_ratio": latest_surface[4],
+                        "universe_age_sec": latest_surface[5],
+                        "snapshot_valid": bool(latest_surface[6]),
+                        "invalid_reason": latest_surface[7],
+                    }
+            except Exception:
+                pass
             hconn.close()
     except Exception:
         pass
@@ -715,6 +781,7 @@ async def get_diagnostics():
         "missing_snapshot_columns": missing_snapshot_columns,
         "tables": tables,
         "history_db": history_db_info,
+        "stable_surface_runtime": stable_surface_runtime,
         "warmup_suppression": warmup_info,
         "ohlcv_enabled": OHLCV_ENABLED,
         "ohlcv_exchange": OHLCV_EXCHANGE,

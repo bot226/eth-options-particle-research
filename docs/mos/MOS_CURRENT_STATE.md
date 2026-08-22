@@ -10,12 +10,36 @@ project-local databases. No BTC database was migrated.
 ```python
 CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v1_eth_asset_runtime_isolation"
+ENGINE_PATCH_VERSION = "v72_single_digit_expiry_normalizer"
+DATASET_EXPORTER_VERSION = "1.2.2"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
 The analytical formulas and thresholds are inherited unchanged. They have not
 yet been validated on ETH and must not be treated as proven ETH trading logic.
+
+## ETH stable surface v71 and expiry normalizer v72
+
+The ETH collector now maintains an additive, research-only Deribit panel using
+rule `v71_balanced_core_24h`. Its target is 240 contracts balanced across
+expiries and by distance to ETH spot. Membership is fixed for 24 hours,
+persisted across restarts, and rotated only at the scheduled boundary or when a
+member disappears or expires. Every rotation creates a new `universe_id`.
+
+`history.db` keeps the fixed panel in `option_surface_universes`,
+`option_surface_snapshots`, and `option_surface_contract_snapshots`. A valid
+snapshot requires at least 95% fresh normalized members with mark IV and delta,
+gamma, vega, and theta. Invalid snapshots retain an exact reason but never
+retain a partial contract panel. The original changing full-chain table and
+public option trade flow continue unchanged in parallel.
+
+Patch `v72_single_digit_expiry_normalizer` accepts both `DMMMYY` and `DDMMMYY`
+Deribit/Bybit expiries while still rejecting unknown months and impossible
+calendar dates. Confirmatory ETH surface evidence begins only with the first
+valid v72 fixed-universe snapshot; earlier rotating-chain observations cannot
+be mixed with it. No entry logic, candidate thresholds, State Machine formula,
+Particle Logic scoring, trade-flow semantics, OHLCV, event, or future-label
+behavior changed.
 
 ## Upstream BTC v70 baseline
 

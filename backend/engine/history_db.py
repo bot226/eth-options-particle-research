@@ -87,6 +87,71 @@ class HistoryDB:
                 ON option_contract_snapshots(ts);
             CREATE INDEX IF NOT EXISTS idx_contract_snapshots_contract
                 ON option_contract_snapshots(exchange, contract_id, ts);
+
+            CREATE TABLE IF NOT EXISTS option_surface_universes (
+                universe_id TEXT PRIMARY KEY,
+                exchange TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                created_ts REAL NOT NULL,
+                selection_spot REAL,
+                selection_rule_version TEXT NOT NULL,
+                target_contracts INTEGER NOT NULL,
+                contract_ids_json TEXT NOT NULL,
+                replacement_count INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS option_surface_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                structural_snapshot_id INTEGER NOT NULL,
+                ts REAL NOT NULL,
+                exchange TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                universe_id TEXT,
+                target_contracts INTEGER NOT NULL,
+                fresh_contracts INTEGER NOT NULL,
+                coverage_ratio REAL NOT NULL,
+                universe_age_sec REAL,
+                snapshot_valid INTEGER NOT NULL,
+                invalid_reason TEXT NOT NULL DEFAULT '',
+                UNIQUE (structural_snapshot_id, exchange),
+                FOREIGN KEY (structural_snapshot_id)
+                    REFERENCES snapshots(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_surface_snapshots_ts
+                ON option_surface_snapshots(exchange, ts);
+            CREATE INDEX IF NOT EXISTS idx_surface_snapshots_universe
+                ON option_surface_snapshots(universe_id, ts);
+
+            CREATE TABLE IF NOT EXISTS option_surface_contract_snapshots (
+                surface_snapshot_id INTEGER NOT NULL,
+                universe_id TEXT NOT NULL,
+                ts REAL NOT NULL,
+                exchange TEXT NOT NULL,
+                contract_id TEXT NOT NULL,
+                source_symbol TEXT,
+                expiry TEXT,
+                strike REAL,
+                option_type TEXT,
+                oi REAL,
+                volume_24h REAL,
+                mark_iv REAL,
+                bid_iv REAL,
+                ask_iv REAL,
+                delta REAL,
+                gamma REAL,
+                vega REAL,
+                theta REAL,
+                mark_price REAL,
+                underlying_price REAL,
+                exchange_sources_json TEXT NOT NULL DEFAULT '[]',
+                PRIMARY KEY (surface_snapshot_id, exchange, contract_id),
+                FOREIGN KEY (surface_snapshot_id)
+                    REFERENCES option_surface_snapshots(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_surface_contracts_contract
+                ON option_surface_contract_snapshots(
+                    universe_id, exchange, contract_id, ts
+                );
         """)
         self._conn.commit()
         log.info("HistoryDB initialized at %s", self.db_path)
@@ -207,9 +272,146 @@ class HistoryDB:
             )
         return rows
 
+    @staticmethod
+    def surface_snapshots_are_comparable(left: dict, right: dict) -> bool:
+        """Gate surface changes to valid snapshots from the exact same epoch."""
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            return False
+        left_universe = str(left.get("universe_id") or "")
+        right_universe = str(right.get("universe_id") or "")
+        return bool(
+            left.get("snapshot_valid")
+            and right.get("snapshot_valid")
+            and left_universe
+            and left_universe == right_universe
+        )
+
+    def _save_surface_snapshot(
+        self,
+        structural_snapshot_id: int,
+        ts: float,
+        surface_data,
+    ) -> None:
+        """Persist one strict fixed-universe surface without touching raw rows."""
+        if not isinstance(surface_data, dict):
+            return
+        universe_id = str(surface_data.get("universe_id") or "")
+        exchange = str(surface_data.get("exchange") or "deribit").lower()
+        asset = str(surface_data.get("asset") or "ETH").upper()
+        target_names = list(dict.fromkeys(
+            str(name)
+            for name in surface_data.get("target_contract_names", [])
+            if str(name)
+        ))
+        target_count = int(
+            surface_data.get("target_contracts") or len(target_names)
+        )
+        snapshot_valid = bool(surface_data.get("snapshot_valid"))
+        invalid_reason = str(surface_data.get("invalid_reason") or "")
+        surface_rows = []
+        if snapshot_valid and universe_id:
+            raw_rows = self._contract_rows(
+                0,
+                ts,
+                surface_data.get("contract_data"),
+            )
+            target_name_set = set(target_names)
+            surface_rows = [
+                row
+                for row in raw_rows
+                if (
+                    row[2] == exchange
+                    and row[4] in target_name_set
+                    and row[10] is not None
+                    and row[10] > 0
+                    and all(row[index] is not None for index in range(13, 17))
+                )
+            ]
+            persisted_coverage = (
+                len(surface_rows) / target_count
+                if target_count > 0
+                else 0.0
+            )
+            minimum_coverage = max(
+                0.95,
+                float(surface_data.get("minimum_coverage_ratio") or 0.95),
+            )
+            if persisted_coverage < minimum_coverage:
+                snapshot_valid = False
+                invalid_reason = "persisted_coverage_below_95pct"
+                surface_rows = []
+            else:
+                surface_data = dict(surface_data)
+                surface_data["fresh_contracts"] = len(surface_rows)
+                surface_data["coverage_ratio"] = persisted_coverage
+        if universe_id:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO option_surface_universes (
+                    universe_id, exchange, asset, created_ts, selection_spot,
+                    selection_rule_version, target_contracts,
+                    contract_ids_json, replacement_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    universe_id,
+                    exchange,
+                    asset,
+                    self._finite_or_none(surface_data.get("created_ts")) or ts,
+                    self._finite_or_none(surface_data.get("selection_spot")),
+                    str(surface_data.get("selection_rule_version") or ""),
+                    target_count,
+                    json.dumps(target_names),
+                    int(surface_data.get("replacement_count") or 0),
+                ),
+            )
+        cursor = self._conn.execute(
+            """
+            INSERT INTO option_surface_snapshots (
+                structural_snapshot_id, ts, exchange, asset, universe_id,
+                target_contracts, fresh_contracts, coverage_ratio,
+                universe_age_sec, snapshot_valid, invalid_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                structural_snapshot_id,
+                ts,
+                exchange,
+                asset,
+                universe_id or None,
+                target_count,
+                int(surface_data.get("fresh_contracts") or 0),
+                float(surface_data.get("coverage_ratio") or 0.0),
+                self._finite_or_none(surface_data.get("universe_age_sec")),
+                int(snapshot_valid),
+                invalid_reason,
+            ),
+        )
+        if not snapshot_valid or not universe_id:
+            return
+        surface_snapshot_id = int(cursor.lastrowid)
+        surface_rows = [
+            (surface_snapshot_id, universe_id, *row[1:])
+            for row in surface_rows
+        ]
+        if surface_rows:
+            self._conn.executemany(
+                """
+                INSERT INTO option_surface_contract_snapshots (
+                    surface_snapshot_id, universe_id, ts, exchange,
+                    contract_id, source_symbol, expiry, strike, option_type,
+                    oi, volume_24h, mark_iv, bid_iv, ask_iv, delta, gamma,
+                    vega, theta, mark_price, underlying_price,
+                    exchange_sources_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                surface_rows,
+            )
+
     def save_snapshot(self, ts: float, oi_data: dict, pdf_data: dict = None,
                       gex_data: dict = None, term_data: dict = None,
-                      exchange_data: dict = None, contract_data=None):
+                      exchange_data: dict = None, contract_data=None,
+                      stable_surface_data=None):
         """Save one structural snapshot and its optional per-contract observations."""
         try:
             cursor = self._conn.execute(
@@ -239,6 +441,11 @@ class HistoryDB:
                     """,
                     contract_rows,
                 )
+            self._save_surface_snapshot(
+                snapshot_id,
+                ts,
+                stable_surface_data,
+            )
             self._conn.commit()
             return snapshot_id
         except Exception as e:

@@ -272,13 +272,17 @@ def _parse_okx_symbol(raw: str) -> Optional[NormalizedInstrument]:
 
 
 def _parse_ddmmmyy(s: str) -> Optional[datetime.date]:
-    """Parse '26DEC25' → date(2025, 12, 26)."""
-    if len(s) < 7:
+    """Parse Deribit/Bybit ``DMMMYY`` or ``DDMMMYY`` expiry dates."""
+    match = re.fullmatch(
+        r"(?P<day>\d{1,2})(?P<month>[A-Za-z]{3})(?P<year>\d{2}|\d{4})",
+        str(s).strip(),
+    )
+    if match is None:
         return None
     try:
-        day = int(s[:2])
-        month_str = s[2:5].upper()
-        year_suffix = s[5:]
+        day = int(match.group("day"))
+        month_str = match.group("month").upper()
+        year_suffix = match.group("year")
         month = _MONTHS.get(month_str)
         if month is None:
             return None

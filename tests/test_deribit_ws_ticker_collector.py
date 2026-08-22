@@ -1505,6 +1505,31 @@ class DeribitWsTickerCollectorTest(unittest.IsolatedAsyncioTestCase):
 
 
 class DeribitTickerNormalizerTest(unittest.TestCase):
+    def test_normalizes_single_and_double_digit_days_for_deribit_and_bybit(self):
+        cases = (
+            ("ETH-4SEP26-4000-C", "ETH-20260904-4000-C"),
+            ("ETH-11SEP26-4000-P", "ETH-20260911-4000-P"),
+        )
+        for exchange_id in ("deribit", "bybit"):
+            for symbol, expected in cases:
+                with self.subTest(exchange_id=exchange_id, symbol=symbol):
+                    normalized = InstrumentNormalizer.normalize_symbol(
+                        exchange_id,
+                        symbol,
+                    )
+                    self.assertIsNotNone(normalized)
+                    self.assertEqual(normalized.canonical_id, expected)
+
+    def test_rejects_bad_month_and_impossible_calendar_date(self):
+        for expiry in ("4XYZ26", "31FEB26"):
+            with self.subTest(expiry=expiry):
+                self.assertIsNone(
+                    InstrumentNormalizer.normalize_symbol(
+                        "deribit",
+                        f"ETH-{expiry}-4000-C",
+                    )
+                )
+
     def test_normalizes_nested_ws_greeks_stats_and_prices(self):
         normalized = InstrumentNormalizer.normalize_ticker("deribit", {
             "instrument_name": "ETH-14AUG26-65000-P",

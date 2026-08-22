@@ -13,6 +13,8 @@ import json
 import time
 import asyncio
 import logging
+import hashlib
+import math
 import httpx
 import websockets
 from pathlib import Path
@@ -40,6 +42,14 @@ _INSTRUMENT_DISK_CACHE_PATH = (
     / "data"
     / "deribit_instruments_cache.json"
 )
+_STABLE_SURFACE_STATE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "deribit_stable_surface_universe.json"
+)
+_STABLE_SURFACE_UNIVERSE_TTL_SEC = 24 * 60 * 60
+_STABLE_SURFACE_MIN_COVERAGE_RATIO = 0.95
+_STABLE_SURFACE_RULE_VERSION = "v71_balanced_core_24h"
 _WS_TICKER_CACHE_MAX_AGE_SEC = 5 * 60
 _WS_MIN_CACHE_COVERAGE_RATIO = 0.70
 _WS_TICKER_IDLE_TIMEOUT_SEC = 60.0
@@ -76,6 +86,7 @@ class DeribitAdapter(BaseExchangeAdapter):
     def __init__(
         self,
         instrument_cache_path: Optional[Path] = _INSTRUMENT_DISK_CACHE_PATH,
+        stable_surface_state_path: Optional[Path] = None,
     ):
         super().__init__(exchange_id="deribit", quality_factor=1.50)
         self._http = httpx.AsyncClient(
@@ -122,6 +133,21 @@ class DeribitAdapter(BaseExchangeAdapter):
         self._instrument_ws_fallback_last_error: str = ""
         self._ws_instruments_count: int = 0
         self._ws_core_instrument_names: set[str] = set()
+        if stable_surface_state_path is not None:
+            self._stable_surface_state_path = Path(stable_surface_state_path)
+        elif instrument_cache_path == _INSTRUMENT_DISK_CACHE_PATH:
+            self._stable_surface_state_path = _STABLE_SURFACE_STATE_PATH
+        else:
+            self._stable_surface_state_path = None
+        self._stable_surface_universe_names: list[str] = []
+        self._stable_surface_universe_id: str = ""
+        self._stable_surface_created_ts: float = 0.0
+        self._stable_surface_selection_spot: float = 0.0
+        self._stable_surface_replacement_count: int = 0
+        self._stable_surface_last_rotation_reason: str = ""
+        self._stable_surface_disk_load_count: int = 0
+        self._stable_surface_disk_write_count: int = 0
+        self._stable_surface_disk_error_count: int = 0
         self._ws_ticker_message_count: int = 0
         self._ws_last_ticker_ts: float = 0.0
         self._ws_last_subscription_refresh_ts: float = 0.0
@@ -209,6 +235,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         self.fetch_attempted: bool = False
         self.disabled_reason: str = ""
         self._load_instrument_cache_from_disk()
+        self._load_stable_surface_universe_from_disk()
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -379,6 +406,81 @@ class DeribitAdapter(BaseExchangeAdapter):
         except Exception as exc:
             self._instrument_disk_cache_error_count += 1
             log.warning("Deribit instrument disk cache write failed: %s", exc)
+
+    def _load_stable_surface_universe_from_disk(self) -> None:
+        """Restore the active ETH research universe without changing its epoch."""
+        path = self._stable_surface_state_path
+        if path is None or not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            names = [
+                str(name)
+                for name in payload.get("instrument_names", [])
+                if str(name).startswith("ETH-")
+            ]
+            universe_id = str(payload.get("universe_id") or "")
+            created_ts = float(payload.get("created_ts") or 0.0)
+            rule_version = str(payload.get("selection_rule_version") or "")
+            currency = str(payload.get("currency") or "").upper()
+            if (
+                not names
+                or not universe_id
+                or created_ts <= 0
+                or currency != "ETH"
+                or rule_version != _STABLE_SURFACE_RULE_VERSION
+            ):
+                raise ValueError("invalid ETH stable surface universe state")
+            self._stable_surface_universe_names = list(dict.fromkeys(names))
+            self._stable_surface_universe_id = universe_id
+            self._stable_surface_created_ts = min(created_ts, time.time())
+            self._stable_surface_selection_spot = float(
+                payload.get("selection_spot") or 0.0
+            )
+            self._stable_surface_replacement_count = int(
+                payload.get("replacement_count") or 0
+            )
+            self._stable_surface_last_rotation_reason = str(
+                payload.get("last_rotation_reason") or "restored"
+            )
+            self._stable_surface_disk_load_count += 1
+        except Exception as exc:
+            self._stable_surface_disk_error_count += 1
+            log.warning("Deribit ETH stable surface state ignored: %s", exc)
+
+    def _write_stable_surface_universe_file(self) -> None:
+        """Atomically persist the fixed ETH universe for restart safety."""
+        path = self._stable_surface_state_path
+        if path is None or not self._stable_surface_universe_names:
+            return
+        payload = {
+            "universe_id": self._stable_surface_universe_id,
+            "created_ts": self._stable_surface_created_ts,
+            "currency": "ETH",
+            "selection_spot": self._stable_surface_selection_spot,
+            "selection_rule_version": _STABLE_SURFACE_RULE_VERSION,
+            "replacement_count": self._stable_surface_replacement_count,
+            "last_rotation_reason": self._stable_surface_last_rotation_reason,
+            "instrument_names": self._stable_surface_universe_names,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_suffix(path.suffix + ".tmp")
+        temporary_path.write_text(
+            json.dumps(payload, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary_path.replace(path)
+        self._stable_surface_disk_write_count += 1
+
+    async def _persist_stable_surface_universe(self) -> None:
+        """Persist the research epoch off the event loop."""
+        if self._stable_surface_state_path is None:
+            return
+        try:
+            await asyncio.to_thread(self._write_stable_surface_universe_file)
+        except Exception as exc:
+            self._stable_surface_disk_error_count += 1
+            log.warning("Deribit ETH stable surface state write failed: %s", exc)
 
     async def _fetch_instruments_ws_fallback(self) -> list[dict]:
         """Use one compressed WebSocket RPC when REST discovery cannot finish."""
@@ -1094,6 +1196,138 @@ class DeribitAdapter(BaseExchangeAdapter):
             depth += 1
         return selected
 
+    def _resolve_stable_surface_universe(
+        self,
+        instruments: list[dict],
+        *,
+        now: Optional[float] = None,
+    ) -> tuple[list[str], bool]:
+        """Reuse one fixed ETH research core until an explicit epoch boundary."""
+        current_ts = time.time() if now is None else float(now)
+        active_names = {
+            str(item.get("instrument_name") or "")
+            for item in instruments
+            if str(item.get("instrument_name") or "").startswith("ETH-")
+        }
+        current_names = list(self._stable_surface_universe_names)
+        missing_names = set(current_names) - active_names
+        age_sec = (
+            current_ts - self._stable_surface_created_ts
+            if self._stable_surface_created_ts > 0
+            else float("inf")
+        )
+        target_count = min(_WS_CORE_UNIVERSE_SIZE, len(active_names))
+        reason = ""
+        if not current_names:
+            reason = "initial_selection"
+        elif missing_names:
+            reason = "instrument_removed_or_expired"
+        elif len(current_names) != target_count:
+            reason = "target_size_changed"
+        elif age_sec >= _STABLE_SURFACE_UNIVERSE_TTL_SEC:
+            reason = "scheduled_24h_rotation"
+        else:
+            return current_names, False
+
+        selected = self._select_core_instrument_names(instruments)
+        if not selected:
+            return current_names, False
+        previous_id = self._stable_surface_universe_id
+        created_ts = current_ts
+        digest_input = "|".join(
+            ["ETH", f"{created_ts:.6f}", _STABLE_SURFACE_RULE_VERSION]
+            + sorted(selected)
+        )
+        self._stable_surface_universe_names = list(selected)
+        self._stable_surface_universe_id = hashlib.sha256(
+            digest_input.encode("utf-8")
+        ).hexdigest()[:24]
+        self._stable_surface_created_ts = created_ts
+        self._stable_surface_selection_spot = self._spot_price
+        if previous_id:
+            self._stable_surface_replacement_count += 1
+        self._stable_surface_last_rotation_reason = reason
+        return list(selected), True
+
+    def get_stable_surface_snapshot(self) -> dict:
+        """Return a research-only fixed-universe snapshot and quality gate."""
+        now = time.time()
+        target_names = list(self._stable_surface_universe_names)
+        fresh_full_names = [
+            name
+            for name in target_names
+            if self._ticker_has_fresh_surface_data(name)
+        ]
+        target_count = len(target_names)
+        fresh_count = len(fresh_full_names)
+        coverage_ratio = fresh_count / target_count if target_count > 0 else 0.0
+        valid = bool(
+            self._stable_surface_universe_id
+            and target_count > 0
+            and coverage_ratio >= _STABLE_SURFACE_MIN_COVERAGE_RATIO
+        )
+        if not self._stable_surface_universe_id:
+            invalid_reason = "universe_not_initialized"
+        elif coverage_ratio < _STABLE_SURFACE_MIN_COVERAGE_RATIO:
+            invalid_reason = "fresh_coverage_below_95pct"
+        else:
+            invalid_reason = ""
+        next_rotation_ts = (
+            self._stable_surface_created_ts + _STABLE_SURFACE_UNIVERSE_TTL_SEC
+            if self._stable_surface_created_ts > 0
+            else None
+        )
+        return {
+            "exchange": "deribit",
+            "asset": "ETH",
+            "universe_id": self._stable_surface_universe_id,
+            "created_ts": self._stable_surface_created_ts,
+            "selection_spot": self._stable_surface_selection_spot,
+            "selection_rule_version": _STABLE_SURFACE_RULE_VERSION,
+            "target_contracts": target_count,
+            "fresh_contracts": fresh_count,
+            "coverage_ratio": coverage_ratio,
+            "minimum_coverage_ratio": _STABLE_SURFACE_MIN_COVERAGE_RATIO,
+            "universe_age_sec": (
+                max(0.0, now - self._stable_surface_created_ts)
+                if self._stable_surface_created_ts > 0
+                else None
+            ),
+            "next_planned_rotation_ts": next_rotation_ts,
+            "replacement_count": self._stable_surface_replacement_count,
+            "last_rotation_reason": self._stable_surface_last_rotation_reason,
+            "snapshot_valid": valid,
+            "invalid_reason": invalid_reason,
+            "contract_names": fresh_full_names if valid else [],
+            "target_contract_names": target_names,
+        }
+
+    def _ticker_has_fresh_surface_data(self, instrument_name: str) -> bool:
+        """Require finite positive IV and all finite Greeks for storage."""
+        ticker = self._ticker_cache_by_instrument.get(instrument_name)
+        if not isinstance(ticker, dict):
+            return False
+        greeks = ticker.get("greeks")
+        if not isinstance(greeks, dict):
+            return False
+        try:
+            mark_iv = float(ticker.get("mark_iv"))
+            greek_values = [
+                float(greeks.get(key))
+                for key in ("delta", "gamma", "vega", "theta")
+            ]
+        except (TypeError, ValueError):
+            return False
+        return bool(
+            mark_iv > 0
+            and math.isfinite(mark_iv)
+            and all(math.isfinite(value) for value in greek_values)
+            and time.time() - self._ticker_received_ts_by_instrument.get(
+                instrument_name,
+                0.0,
+            ) <= _WS_TICKER_CACHE_MAX_AGE_SEC
+        )
+
     async def _refresh_ws_option_subscriptions(self, ws) -> bool:
         """Subscribe to a balanced core and bootstrap the full chain."""
         force_core_resubscribe = self._ws_soft_resubscribe_requested
@@ -1126,7 +1360,11 @@ class DeribitAdapter(BaseExchangeAdapter):
             return False
 
         self._ws_instruments_count = len(instrument_names)
-        core_instrument_names = self._select_core_instrument_names(instruments)
+        core_instrument_names, stable_universe_changed = (
+            self._resolve_stable_surface_universe(instruments)
+        )
+        if stable_universe_changed:
+            await self._persist_stable_surface_universe()
         self._ws_core_instrument_names = set(core_instrument_names)
         prioritized_instrument_names = core_instrument_names + [
             name
@@ -1835,6 +2073,7 @@ class DeribitAdapter(BaseExchangeAdapter):
         )
         rest_circuit_state = self._rest_circuit_state(now=now)
         rest_retry_after_sec = self._rest_circuit_retry_after_sec(now=now)
+        stable_surface = self.get_stable_surface_snapshot()
         return {
             "deribit_enabled_config": self.enabled_config,
             "deribit_adapter_initialized": self.initialized,
@@ -1911,6 +2150,52 @@ class DeribitAdapter(BaseExchangeAdapter):
             ),
             "deribit_ws_instruments_count": self._ws_instruments_count,
             "deribit_ws_core_instruments_count": core_count,
+            "deribit_surface_universe_id": stable_surface["universe_id"],
+            "deribit_surface_target_contracts": stable_surface[
+                "target_contracts"
+            ],
+            "deribit_surface_fresh_contracts": stable_surface[
+                "fresh_contracts"
+            ],
+            "deribit_surface_coverage_ratio": round(
+                stable_surface["coverage_ratio"],
+                6,
+            ),
+            "deribit_surface_snapshot_valid": stable_surface[
+                "snapshot_valid"
+            ],
+            "deribit_surface_invalid_reason": stable_surface[
+                "invalid_reason"
+            ],
+            "deribit_surface_universe_age_sec": (
+                round(stable_surface["universe_age_sec"], 3)
+                if stable_surface["universe_age_sec"] is not None
+                else None
+            ),
+            "deribit_surface_replacement_count": stable_surface[
+                "replacement_count"
+            ],
+            "deribit_surface_next_planned_rotation_ts": stable_surface[
+                "next_planned_rotation_ts"
+            ],
+            "deribit_surface_selection_rule_version": (
+                _STABLE_SURFACE_RULE_VERSION
+            ),
+            "deribit_surface_min_coverage_ratio": (
+                _STABLE_SURFACE_MIN_COVERAGE_RATIO
+            ),
+            "deribit_surface_last_rotation_reason": stable_surface[
+                "last_rotation_reason"
+            ],
+            "deribit_surface_disk_load_count": (
+                self._stable_surface_disk_load_count
+            ),
+            "deribit_surface_disk_write_count": (
+                self._stable_surface_disk_write_count
+            ),
+            "deribit_surface_disk_error_count": (
+                self._stable_surface_disk_error_count
+            ),
             "deribit_instrument_cache_count": len(self._instruments_cache),
             "deribit_instrument_cache_age_sec": (
                 round(time.time() - self._instruments_cache_ts, 3)

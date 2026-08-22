@@ -28,7 +28,7 @@ class MosDatasetExporterTest(unittest.TestCase):
             "CODE_VERSION = 'test'\n"
             "RESEARCH_SCHEMA_VERSION = '2.0'\n"
             "ENGINE_PATCH_VERSION = 'test'\n"
-            "DATASET_EXPORTER_VERSION = '1.2.1'\n"
+            "DATASET_EXPORTER_VERSION = '1.2.2'\n"
             "PARTICLE_LOGIC_VERSION = 'particle_shadow_v3'\n",
             encoding="utf-8",
         )
@@ -151,6 +151,46 @@ class MosDatasetExporterTest(unittest.TestCase):
         )
         with zipfile.ZipFile(archive_path) as archive:
             self.assertIn(database_name, archive.namelist())
+
+    def test_reports_stable_surface_time_ranges(self):
+        history_connection = self.connections[
+            REQUIRED_DATABASES.index("history.db")
+        ]
+        history_connection.execute(
+            "CREATE TABLE option_surface_universes (created_ts REAL NOT NULL)"
+        )
+        history_connection.execute(
+            "CREATE TABLE option_surface_snapshots (ts REAL NOT NULL)"
+        )
+        history_connection.execute(
+            "CREATE TABLE option_surface_contract_snapshots (ts REAL NOT NULL)"
+        )
+        history_connection.execute(
+            "INSERT INTO option_surface_universes VALUES (1786300000.0)"
+        )
+        history_connection.execute(
+            "INSERT INTO option_surface_snapshots VALUES (1786300300.0)"
+        )
+        history_connection.execute(
+            "INSERT INTO option_surface_contract_snapshots VALUES (1786300300.0)"
+        )
+        history_connection.commit()
+
+        _, manifest = create_dataset_export(
+            self.data_dir,
+            self.output_dir,
+            "mos_surface",
+            project_root=self.root,
+            started_at=datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc),
+        )
+
+        time_ranges = manifest["databases"]["history.db"]["time_ranges"]
+        self.assertEqual(time_ranges["option_surface_universes"]["rows"], 1)
+        self.assertEqual(time_ranges["option_surface_snapshots"]["rows"], 1)
+        self.assertEqual(
+            time_ranges["option_surface_contract_snapshots"]["rows"],
+            1,
+        )
 
     def test_fails_when_required_database_is_missing(self):
         self.connections[-1].close()
