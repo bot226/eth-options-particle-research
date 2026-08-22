@@ -19,7 +19,11 @@ from api.deribit_adapter import (
 )
 from engine.history_db import HistoryDB
 from engine.instrument_normalizer import InstrumentNormalizer
-from engine.multi_data_manager import MultiExchangeDataManager, _has_valid_mark_iv
+from engine.multi_data_manager import (
+    MultiExchangeDataManager,
+    _has_valid_mark_iv,
+    _normalized_option_type,
+)
 
 
 def _instruments(count=260):
@@ -72,6 +76,26 @@ def _normalized_ticker(symbol, index=0):
 
 
 class StableSurfaceUniverseTests(unittest.TestCase):
+    def test_normalized_deribit_call_put_diagnostics_accept_canonical_types(self):
+        call = InstrumentNormalizer.normalize_ticker(
+            "deribit",
+            _full_ticker("ETH-4SEP26-4000-C"),
+        )
+        put = InstrumentNormalizer.normalize_ticker(
+            "deribit",
+            _full_ticker("ETH-4SEP26-4000-P"),
+        )
+
+        self.assertEqual("C", _normalized_option_type(call))
+        self.assertEqual("P", _normalized_option_type(put))
+        self.assertEqual("C", _normalized_option_type({"type": "call"}))
+        self.assertEqual("P", _normalized_option_type({"option_type": "PUT"}))
+        self.assertEqual(
+            "P",
+            _normalized_option_type({"type": None, "option_type": "P"}),
+        )
+        self.assertIsNone(_normalized_option_type({"type": "unknown"}))
+
     def test_normalized_deribit_mark_iv_counts_as_valid_diagnostic_iv(self):
         normalized = InstrumentNormalizer.normalize_ticker(
             "deribit",

@@ -10,7 +10,7 @@ project-local databases. No BTC database was migrated.
 ```python
 CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v73_deribit_valid_iv_diagnostic_key"
+ENGINE_PATCH_VERSION = "v74_deribit_call_put_diagnostic_value"
 DATASET_EXPORTER_VERSION = "1.2.2"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
@@ -47,6 +47,14 @@ IV storage was complete, but `mos_research.snapshots.valid_iv_count` was written
 as zero because the diagnostic looked for the raw `mark_iv` key after
 normalization. Existing rows are retained as a documented telemetry artifact;
 new rows report the correct count. No scoring or live-entry behavior changed.
+
+Patch `v74_deribit_call_put_diagnostic_value` corrects the adjacent research
+telemetry counters to recognize normalized option types `C` and `P`, while
+retaining compatibility with `call` and `put`. Before v74, contract rows were
+classified correctly but `mos_research.snapshots.calls_count` and `puts_count`
+were written as zero. Existing rows remain unchanged; new rows report the
+actual counts. No formulas, acceptance thresholds, or live-entry behavior
+changed.
 
 ## Upstream BTC v70 baseline
 

@@ -56,6 +56,20 @@ def _has_valid_mark_iv(ticker: dict) -> bool:
     return mark_iv > 0 and math.isfinite(mark_iv)
 
 
+def _normalized_option_type(ticker: dict) -> Optional[str]:
+    """Return canonical ``C``/``P`` for normalized or compatibility values."""
+    try:
+        value = ticker.get("type") or ticker.get("option_type", "")
+    except AttributeError:
+        return None
+    return {
+        "C": "C",
+        "CALL": "C",
+        "P": "P",
+        "PUT": "P",
+    }.get(str(value).strip().upper())
+
+
 class MultiExchangeDataManager:
     """Multi-exchange data orchestrator with unified output interface.
 
@@ -247,8 +261,14 @@ class MultiExchangeDataManager:
                 raw_count = len(raw_tickers)
                 parsed_count = len(tickers)
 
-                calls_count = sum(1 for t in tickers if t.get("type") == "call")
-                puts_count = sum(1 for t in tickers if t.get("type") == "put")
+                calls_count = sum(
+                    1 for ticker in tickers
+                    if _normalized_option_type(ticker) == "C"
+                )
+                puts_count = sum(
+                    1 for ticker in tickers
+                    if _normalized_option_type(ticker) == "P"
+                )
                 expiries_count = len(set(t.get("expiry") for t in tickers if t.get("expiry")))
                 strikes_count = len(set(t.get("strike") for t in tickers if t.get("strike")))
                 valid_greeks = sum(1 for t in tickers if t.get("delta") is not None)

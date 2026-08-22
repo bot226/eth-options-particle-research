@@ -74,6 +74,10 @@ and a frozen ETH protocol before future confirmation.
   IV and contract-level mark IV are present. Patch
   `v73_deribit_valid_iv_diagnostic_key` resolves the normalized-key mismatch for
   new rows; retain earlier zeros as a known telemetry artifact.
+- `calls_count` and `puts_count` are zero in pre-v74 research snapshots even
+  though contract types are present. Patch
+  `v74_deribit_call_put_diagnostic_value` recognizes normalized `C`/`P` values
+  for new rows; retain earlier zeros as a known telemetry artifact.
 - Git branch/commit provenance is absent from the audited exporter manifest.
 
 ## Registry update rule
