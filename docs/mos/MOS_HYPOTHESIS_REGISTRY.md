@@ -70,9 +70,10 @@ and a frozen ETH protocol before future confirmation.
 - Deribit adjacent surface Jaccard range: 0.598–0.610; strict required overlap:
   0.95. Deribit surface confirmation is technically blocked even though live
   transport and trade collection are healthy.
-- `mos_research.snapshots.valid_iv_count` is zero in the audited archive while
-  ATM IV and contract-level mark IV are present; treat this as a diagnostic
-  telemetry inconsistency until separately resolved.
+- `mos_research.snapshots.valid_iv_count` is zero in pre-v73 archives while ATM
+  IV and contract-level mark IV are present. Patch
+  `v73_deribit_valid_iv_diagnostic_key` resolves the normalized-key mismatch for
+  new rows; retain earlier zeros as a known telemetry artifact.
 - Git branch/commit provenance is absent from the audited exporter manifest.
 
 ## Registry update rule

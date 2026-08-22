@@ -10,7 +10,7 @@ project-local databases. No BTC database was migrated.
 ```python
 CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v72_single_digit_expiry_normalizer"
+ENGINE_PATCH_VERSION = "v73_deribit_valid_iv_diagnostic_key"
 DATASET_EXPORTER_VERSION = "1.2.2"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
@@ -40,6 +40,13 @@ valid v72 fixed-universe snapshot; earlier rotating-chain observations cannot
 be mixed with it. No entry logic, candidate thresholds, State Machine formula,
 Particle Logic scoring, trade-flow semantics, OHLCV, event, or future-label
 behavior changed.
+
+Patch `v73_deribit_valid_iv_diagnostic_key` corrects research telemetry to
+count normalized Deribit `markIv` values. Before v73, contract and stable-surface
+IV storage was complete, but `mos_research.snapshots.valid_iv_count` was written
+as zero because the diagnostic looked for the raw `mark_iv` key after
+normalization. Existing rows are retained as a documented telemetry artifact;
+new rows report the correct count. No scoring or live-entry behavior changed.
 
 ## Upstream BTC v70 baseline
 

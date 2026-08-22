@@ -46,6 +46,16 @@ def _has_complete_surface_metrics(ticker: dict) -> bool:
     )
 
 
+def _has_valid_mark_iv(ticker: dict) -> bool:
+    """Accept the normalized ``markIv`` key and the raw compatibility alias."""
+    try:
+        value = ticker.get("markIv", ticker.get("mark_iv"))
+        mark_iv = float(value)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return mark_iv > 0 and math.isfinite(mark_iv)
+
+
 class MultiExchangeDataManager:
     """Multi-exchange data orchestrator with unified output interface.
 
@@ -242,7 +252,7 @@ class MultiExchangeDataManager:
                 expiries_count = len(set(t.get("expiry") for t in tickers if t.get("expiry")))
                 strikes_count = len(set(t.get("strike") for t in tickers if t.get("strike")))
                 valid_greeks = sum(1 for t in tickers if t.get("delta") is not None)
-                valid_iv = sum(1 for t in tickers if t.get("mark_iv") is not None and t.get("mark_iv") > 0)
+                valid_iv = sum(_has_valid_mark_iv(t) for t in tickers)
                 valid_gamma = sum(1 for t in tickers if t.get("gamma") is not None)
                 
                 # Dynamic deribit_status and reason

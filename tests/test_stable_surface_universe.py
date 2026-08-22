@@ -19,7 +19,7 @@ from api.deribit_adapter import (
 )
 from engine.history_db import HistoryDB
 from engine.instrument_normalizer import InstrumentNormalizer
-from engine.multi_data_manager import MultiExchangeDataManager
+from engine.multi_data_manager import MultiExchangeDataManager, _has_valid_mark_iv
 
 
 def _instruments(count=260):
@@ -72,6 +72,20 @@ def _normalized_ticker(symbol, index=0):
 
 
 class StableSurfaceUniverseTests(unittest.TestCase):
+    def test_normalized_deribit_mark_iv_counts_as_valid_diagnostic_iv(self):
+        normalized = InstrumentNormalizer.normalize_ticker(
+            "deribit",
+            _full_ticker("ETH-4SEP26-4000-C"),
+        )
+
+        self.assertIsNotNone(normalized)
+        self.assertIn("markIv", normalized)
+        self.assertNotIn("mark_iv", normalized)
+        self.assertTrue(_has_valid_mark_iv(normalized))
+        self.assertTrue(_has_valid_mark_iv({"mark_iv": 0.55}))
+        self.assertFalse(_has_valid_mark_iv({"markIv": 0.0}))
+        self.assertFalse(_has_valid_mark_iv({"markIv": float("nan")}))
+
     def test_single_digit_expiry_reaches_normalized_surface_payload(self):
         names = [
             f"ETH-4SEP26-{3_000 + index * 500}-{option_type}"
