@@ -10,18 +10,18 @@ project-local databases. No BTC database was migrated.
 ```python
 CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v92.4_eth_interval_parent_closure"
+ENGINE_PATCH_VERSION = "v92.5_eth_interval_parent_index"
 DATASET_EXPORTER_VERSION = "1.2.2"
-INTERVAL_EXPORTER_VERSION = "92.4-eth.1"
+INTERVAL_EXPORTER_VERSION = "92.5-eth.1"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
 The analytical formulas and thresholds are inherited unchanged. They have not
 yet been validated on ETH and must not be treated as proven ETH trading logic.
 
-## ETH interval export and audit v92.4
+## ETH interval export and audit v92.5
 
-Patch `v92.4_eth_interval_parent_closure` adds a research-only, half-open
+Patch `v92.5_eth_interval_parent_index` adds a research-only, half-open
 ETH interval exporter and full archive-audit command. The exporter embeds only
 the two active ETH frozen protocols, uses the latest fully closed `ETHUSDT`
 minute as its upper boundary, keeps seven days of support separate, and records
@@ -32,6 +32,8 @@ are canonicalized to LF, so Windows line endings cannot create a false drift;
 raw hashes remain in the manifest for forensics.
 Parent closure now preserves every declared source identity, including parents
 just outside the time window referenced by an in-window child.
+The exporter builds one temporary index per unindexed referenced parent key so
+this integrity closure does not repeatedly scan large raw tables.
 
 The audit produces JSON and Markdown, reports old/new/cumulative accounting,
 profiles all registered ETH-H1 through ETH-H7 horizons plus clearly labelled

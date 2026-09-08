@@ -241,7 +241,11 @@ def _slice_copy(path: Path, database_name: str, support_start: float, end: float
     """Create a compact slice from an immutable online-backup copy."""
     full_copy = path.with_name(f".{path.name}.full")
     path.replace(full_copy)
-    db = _readonly(full_copy)
+    # ``full_copy`` is an isolated online-backup copy, not a live source.
+    # Open it writable because the temporary parent-key indexes below are
+    # needed to make closure fast; the caller's databases remain untouched.
+    db = sqlite3.connect(full_copy, timeout=60)
+    db.row_factory = sqlite3.Row
     db.create_function("utc_epoch", 1, _safe_epoch, deterministic=True)
     tables = _tables(db)
     columns = {table: _columns(db, table) for table in tables}
@@ -340,6 +344,40 @@ def _slice_copy(path: Path, database_name: str, support_start: float, end: float
             for fk in db.execute(f"PRAGMA foreign_key_list({_quote(child)})"):
                 relations.append((child, fk[3], fk[2], fk[4]))
         relations.extend(EXTRA_PARENT_RELATIONS.get(database_name, []))
+        # Some legacy MOS parent identities (notably
+        # mos_research.snapshots.snapshot_id) are not indexed even though
+        # child tables reference them.  Full parent closure is required for
+        # archive integrity, but repeatedly joining an unindexed multi-GB
+        # table makes the exporter appear hung.  Build one narrow temporary
+        # index on each referenced parent key in the immutable full copy.
+        indexed_parent_keys: set[tuple[str, str]] = set()
+        for _child, _child_key, parent, parent_key in set(relations):
+            relation_key = (parent, parent_key)
+            if relation_key in indexed_parent_keys:
+                continue
+            if (
+                parent not in columns
+                or parent_key not in columns[parent]
+            ):
+                continue
+            indexed = False
+            for index_row in db.execute(f"PRAGMA index_list({_quote(parent)})"):
+                index_name = str(index_row[1])
+                index_columns = db.execute(
+                    f"PRAGMA index_info({_quote(index_name)})"
+                ).fetchall()
+                if index_columns and index_columns[0][2] == parent_key:
+                    indexed = True
+                    break
+            if not indexed:
+                digest = hashlib.sha256(
+                    f"{database_name}:{parent}:{parent_key}".encode("utf-8")
+                ).hexdigest()[:16]
+                db.execute(
+                    f"CREATE INDEX IF NOT EXISTS {_quote('idx_interval_parent_' + digest)} "
+                    f"ON {_quote(parent)} ({_quote(parent_key)})"
+                )
+            indexed_parent_keys.add(relation_key)
         for _ in range(len(tables) + 1):
             changed = 0
             for child, child_key, parent, parent_key in relations:
