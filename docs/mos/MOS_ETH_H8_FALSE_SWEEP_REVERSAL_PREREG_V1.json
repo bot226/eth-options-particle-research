@@ -1,0 +1,124 @@
+{
+  "protocol_id": "MOS_ETH_H8_FALSE_SWEEP_REVERSAL_PREREG_V1",
+  "protocol_version": "1.0.0",
+  "hypothesis_id": "ETH-H8",
+  "result_id_prefix": "ETH-H8",
+  "frozen_at_utc": "2026-09-08T18:30:38.626Z",
+  "eligible_data_after_utc": "2026-09-08T18:30:38.626Z",
+  "asset": "ETHUSDT",
+  "asset_scope": "ETH",
+  "purpose": "Prospectively test whether a new ETH option-readiness event followed by a strict one-sided false sweep predicts a 30-minute reversal in ETH linear futures after realistic costs and latency.",
+  "research_only": true,
+  "live_entry_changes_allowed": false,
+  "discovery_boundary": {
+    "latest_inspected_archive": "mos_interval_2026-08-29T045600Z_to_2026-09-08T160100Z_210a8c73.zip",
+    "latest_inspected_archive_sha256": "C3967758501A1E6364A2FC17FD359B22D6A1E2985591360C87BD6171653A64F5",
+    "discovery_data_through_utc_excluded_from_confirmation": "2026-09-08T18:30:38.626Z",
+    "discovery_status": "descriptive_only_not_confirmation",
+    "btc_definition_role": "economic_inspiration_only; no BTC observation, effect, sample, threshold result or cutoff is ETH evidence"
+  },
+  "evidence_isolation": {
+    "confirmation_asset": "ETH",
+    "eligible_databases": "ETH project databases only",
+    "cross_asset_database_merge_allowed": false,
+    "cross_asset_threshold_transfer_allowed": false,
+    "correlated_asset_periods_count_as_independent": false
+  },
+  "event_definition": {
+    "candidate_is_new": 1,
+    "setup_family": "VOLATILITY_WITHOUT_DIRECTION",
+    "event_deduplication_sec": 1800,
+    "require_source_exclude_from_analysis_false": true,
+    "minimum_same_contract_overlap_ratio": 0.95,
+    "minimum_contract_observation_count": 1,
+    "required_vwd_particle_lineage": true,
+    "required_vwd_new_episode": true,
+    "event_quality": [
+      "ETH-only source rows",
+      "no collector outage or reconnect interval crossing the feature/outcome window",
+      "both exchange health histories meet the declared 80-percent five-minute bucket rule",
+      "causal same-contract Greek match ratio >= 0.80 for each used exchange",
+      "matched surface gap <= 600 seconds and overlap >= 0.95 when a surface comparison is used",
+      "complete ETHUSDT one-minute outcome path coverage >= 0.95"
+    ]
+  },
+  "false_sweep_definition": {
+    "pre_event_observation_sec": 900,
+    "rolling_reference_sec": 900,
+    "minimum_excursion_bps": 10,
+    "upper": "At least one one-minute candle in the final 15 minutes has high > preceding rolling 15-minute high * 1.001 and closes below that prior high.",
+    "lower": "At least one one-minute candle in the final 15 minutes has low < preceding rolling 15-minute low * 0.999 and closes above that prior low.",
+    "both_or_none": "Reject BOTH and NONE; exactly one side is required.",
+    "direction": "reverse_the_false_sweep",
+    "holding_period_sec": 1800
+  },
+  "ohlcv_definition": {
+    "symbol": "ETHUSDT",
+    "timeframe": "1m",
+    "entry_rule": "first complete one-minute candle close at or after the event timestamp plus the declared execution delay",
+    "maximum_alignment_sec": 90,
+    "exit_rule": "the complete one-minute candle close 1800 seconds after entry",
+    "minimum_path_coverage_ratio": 0.95
+  },
+  "execution_stress": {
+    "round_trip_cost_bps": [6, 10, 15],
+    "entry_delays_sec": [0, 15, 60],
+    "primary_delay_sec": 0,
+    "latency_stress_is_not_a_new_model": true
+  },
+  "controls": [
+    "same_timestamp_ETH_continuation_of_false_sweep",
+    "same_timestamp_ETH_price_only_false_sweep_grid_without_VWD",
+    "same_timestamp_ETH_no_direction_neutral_control",
+    "within_day_time_permutation_control",
+    "exchange_label_and_source_availability_control"
+  ],
+  "walk_forward": {
+    "split": "expanding_ETH_UTC_day_walk_forward",
+    "thresholds": "fixed in this preregistration; no post-freeze retuning",
+    "outcomes": "non_overlapping within each declared model and day/week blocks",
+    "confidence_blocks": ["ETH_UTC_day", "ETH_UTC_week"],
+    "bootstrap_samples": 5000,
+    "permutation_samples": 5000,
+    "random_seed": 226
+  },
+  "multiple_testing_family": {
+    "members": "ETH-H8 primary reversal at delays 0/15/60 seconds; continuation, price-only and neutral controls are reported at the same timestamps; costs are execution stress, not additional selections",
+    "holm_alpha": 0.05,
+    "shared_day_and_week_max_t_alpha": 0.05,
+    "reported_p_values": "unadjusted descriptive values are allowed only with explicit small-sample labeling; promotion uses adjusted familywise values"
+  },
+  "confirmation_gate": {
+    "minimum_healthy_common_days": 28,
+    "minimum_complete_weeks": 4,
+    "minimum_independent_trades": 50,
+    "minimum_events_per_sweep_side": 15,
+    "minimum_positive_week_fraction": 0.6,
+    "required_positive_mean_at_each_cost": true,
+    "required_day_block_95pct_lower_bound_at_15bps_gt_zero": true,
+    "required_week_block_95pct_lower_bound_at_15bps_gt_zero": true,
+    "required_holm_adjusted_p_below": 0.05,
+    "required_shared_block_max_t_adjusted_p_below": 0.05,
+    "required_beats_same_timestamp_price_only_grid": true,
+    "required_beats_same_timestamp_continuation_control": true,
+    "required_same_sign_across_latency_stress": true,
+    "required_valid_quality_gate": true,
+    "failure_policy": "NOT_READY, REJECTED_CURRENT_SAMPLE or TECHNICALLY_BLOCKED; never retune from confirmation results"
+  },
+  "promotion_gate": {
+    "requires_separate_reviewed_code_version": true,
+    "requires_explicit_owner_approval": true,
+    "requires_shadow_operation_and_rollback": true,
+    "live_entry_changes_allowed": false
+  },
+  "anti_leakage": [
+    "Only ETH data strictly after eligible_data_after_utc can enter confirmation.",
+    "All event features end at or before the event timestamp.",
+    "Greek joins use the latest earlier snapshot of the same ETH contract on the same exchange with age <= 600 seconds.",
+    "Matched surfaces use the same contract IDs only, gap <= 600 seconds and overlap >= 0.95.",
+    "Outage and reconnect intervals are excluded and are never repaired by interpolation.",
+    "Outcomes are complete one-minute paths and non-overlapping.",
+    "BTC and SOL observations, thresholds, results and sample sizes can never enter ETH confirmation.",
+    "The freeze timestamp is immutable; a failed gate does not move it backward."
+  ]
+}

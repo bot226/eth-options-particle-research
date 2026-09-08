@@ -22,8 +22,10 @@ yet been validated on ETH and must not be treated as proven ETH trading logic.
 ## ETH interval export and audit v92.6
 
 Patch `v92.6_eth_synthetic_fallback_lineage` adds a research-only, half-open
-ETH interval exporter and full archive-audit command. The exporter embeds only
-the two active ETH frozen protocols, uses the latest fully closed `ETHUSDT`
+ETH interval exporter and full archive-audit command. The v92.6 exporter embeds
+the two ETH protocols that existed when it was versioned; the separately frozen
+ETH-H8 preregistration is not yet embedded by this tooling. It uses the latest
+fully closed `ETHUSDT`
 minute as its upper boundary, keeps seven days of support separate, and records
 the 720-minute carryover/maturity boundary. It requires the four ETH project
 databases and rejects mixed BTC/SOL identity, missing price minutes, integrity
@@ -44,9 +46,11 @@ The audit produces JSON and Markdown, reports old/new/cumulative accounting,
 profiles all registered ETH-H1 through ETH-H7 horizons plus clearly labelled
 diagnostic horizons, and replays H7 lineage from mandatory ETH history/MOS
 sources when an optional historical particle DB is absent. Exact parity is
-required whenever both lineage sources overlap. No BTC H8/H12 observer,
-threshold, cutoff, result, or sample was transferred. Live behavior and all
-existing databases remain unchanged.
+required whenever both lineage sources overlap. ETH-H8 was later frozen in its
+own preregistration after a separate discovery replay; v92.6 has not been
+changed to embed or confirm H8. No BTC H8/H12 observer, threshold, cutoff,
+result, or sample was transferred. Live behavior and all existing databases
+remain unchanged.
 
 ## ETH stable surface v71 and expiry normalizer v72
 

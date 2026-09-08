@@ -1,18 +1,25 @@
 # MOS ETH Hypothesis Registry
 
-Last updated: 2026-08-15
+Last updated: 2026-09-08
 
-Latest audited ETH archive: `mos_baseline_2026-08-14T141427Z.zip`
+Latest audited ETH archive: `mos_interval_2026-08-29T045600Z_to_2026-09-08T160100Z_210a8c73.zip`
 
-Clean common duration: 0.12215 days
+Clean common duration: 10.0903 healthy days (10.4618 calendar days)
 
-Latest live observation (not an audited archive): 13,105 option trades
+Latest audited interval observation: 359,313 option trades (Bybit 321,176;
+Deribit 38,137), zero dropped trades
 
 Frozen ETH-H7 protocol SHA-256:
 `E184B0C6FAD1E7849C9C2EA94A0882C479E9007BF61CD3ED1D52DEF9B23C906A`.
 
 ETH-H7 freeze and eligible-data cutoff:
 `2026-08-15T18:19:19.565Z`.
+
+Frozen ETH-H8 protocol SHA-256:
+`329962281504E28B445EBAC926339B91CD96701AD8ABFE48F6C611AF69610D5E`.
+
+ETH-H8 freeze and eligible-data cutoff:
+`2026-09-08T18:30:38.626Z`.
 
 This file is the durable, asset-isolated memory of the ETH research program. A
 failed, weakened or sign-reversed hypothesis is retained; ETH IDs are never
@@ -30,6 +37,7 @@ this registry.
 | ETH-H5 | Bybit/Deribit ETH option-flow agreement improves range inference | `MOS_OPTION_FLOW_PREREG_V1.json` | NOT_READY | Paired raw observations 15/10/8 at 5m/15m/30m; signed-delta agreement 46.7%/60.0%/37.5%; no independent-day threshold test | Prior-day thresholds, independent days and valid source-specific quality |
 | ETH-H6 | Matched ETH option surface improves 60m range after strict sweep | Strict matched-surface definition and H6 gate | TECHNICALLY_BLOCKED | 8 overlapping sweep timestamps, 0 with eligible matched surfaces on both exchanges; Deribit strict surface pairs 0/34 | 28 ETH days, >=100 sweeps, >14 test days and >=95% same-contract overlap |
 | ETH-H7 | ETH option readiness selects expansion; preceding ETH trend quality conditions continuation versus reversal | `MOS_TREND_BEFORE_COMPRESSION_PREREG_V1.json` | FROZEN_PENDING | No eligible post-freeze ETH data inspected; all earlier ETH data remain discovery/baseline | Only ETH data strictly after 2026-08-15T18:19:19.565Z; 28-day/100-event gate |
+| ETH-H8 | ETH option readiness followed by a strict one-sided 10bps false sweep predicts a 30m reversal | `MOS_ETH_H8_FALSE_SWEEP_REVERSAL_PREREG_V1.json` | FROZEN_PENDING / NOT_READY / TECHNICALLY_BLOCKED | Discovery only: 12 trades over 7 days/3 weeks; primary 0s net mean -0.064379% at 15 bps, 60s stress +0.021155% with CI crossing zero; continuation control negative | Only ETH data strictly after 2026-09-08T18:30:38.626Z; 28 healthy days, 4 weeks, >=50 trades, >=80% causal Greeks, >=95% matched surface and full Holm/max-T gate |
 
 ## BTC governance context retained without evidence transfer
 
@@ -89,9 +97,10 @@ are never deleted. No registry state alone authorizes a live-entry change.
 
 ## Asset-isolated interval tooling
 
-ETH interval exporter/auditor v92.6 covers the existing ETH-H1 through ETH-H7
-rows without creating ETH-H8 or ETH-H12. It embeds and verifies the current ETH
-protocol hashes, reports old/new/cumulative evidence separately, and labels
-unregistered temporal horizons as diagnostic only. Infrastructure availability
-does not change any evidence state in this registry; the next untouched ETH
-archive must still pass each frozen gate.
+ETH interval exporter/auditor v92.6 covers the ETH-H1 through ETH-H7 rows. ETH-H8
+is frozen in its own preregistration after the current discovery replay; the
+existing exporter has not yet been changed to embed or confirm H8. Until that
+tooling is versioned, H8 confirmation remains technically blocked and any H8
+replay is diagnostic only. Infrastructure availability does not change any
+evidence state in this registry; the next untouched ETH archive must still pass
+each frozen gate.

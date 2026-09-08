@@ -191,4 +191,7 @@ Each ETH archive must produce:
 Continue the untouched ETH collection. Do not reset databases and do not change
 thresholds or live entry logic. The raw-flow family requires at least 14 healthy
 common ETH days. ETH-H6 keeps its stricter 28-day, 100-sweep and 14-test-day
-gate. ETH-H7 uses only ETH data strictly after its own freeze timestamp.
+gate. ETH-H7 uses only ETH data strictly after its own freeze timestamp. ETH-H8
+uses only ETH data strictly after its own freeze timestamp and keeps its
+28-day/4-week/50-trade and causal-quality gates; the current H8 replay is
+discovery-only.

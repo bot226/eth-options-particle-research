@@ -50,6 +50,8 @@ Do not tune system to one quiet or one active market sample.
   cutoff remains discovery/baseline; only later data is eligible confirmation.
 - Never promote research into live-entry behavior without a separate reviewed
   version and explicit owner approval.
+- ETH-H8 is a separately frozen, ETH-only protocol. Its discovery replay and
+  BTC-inspired geometry do not authorize entry logic or confirmation.
 
 After completing code or documentation changes, commit and push the finished work
 to the current working branch unless the user explicitly asks not to push.

@@ -105,3 +105,8 @@ Do not create duplicate version files.
 Current next task is always described in:
 
 `/docs/mos/MOS_NEXT_TASK.md`
+
+The active ETH hypothesis set now includes ETH-H1 through ETH-H8. ETH-H8 is
+frozen prospectively in `docs/mos/MOS_ETH_H8_FALSE_SWEEP_REVERSAL_PREREG_V1.json`;
+its current archive replay is discovery-only and must not be treated as
+confirmation.

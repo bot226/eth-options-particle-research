@@ -50,8 +50,10 @@ execution change.
    choosing the first UTC instant not already counted as new ETH evidence.
 3. Audit it with `audit_eth_mos_archive.bat` and pass every earlier ETH interval
    with `--previous` when using the command directly.
-4. Do not promote or retune ETH-H1 through ETH-H7 unless the corresponding
-   frozen day/event/quality gates pass.
+4. Do not promote or retune ETH-H1 through ETH-H8 unless the corresponding
+   frozen day/event/quality gates pass. ETH-H8 confirmation begins strictly
+   after `2026-09-08T18:30:38.626Z` and is currently blocked by sample size,
+   Deribit causal Greek coverage and missing Bybit stable-surface coverage.
 
 Legacy baseline ZIPs lacking embedded frozen protocols and explicit
 analysis/support/carryover boundaries must be re-exported from the live ETH
