@@ -40,6 +40,9 @@ class EthResearchIntervalExporterTest(unittest.TestCase):
             "CREATE TABLE ohlcv_candles(exchange TEXT,symbol TEXT,timeframe TEXT,timestamp_utc REAL,high REAL,low REAL,close REAL,candle_source_verified INTEGER,created_at_utc REAL)"
         )
         db.execute("CREATE TABLE snapshots(snapshot_id TEXT PRIMARY KEY,timestamp_utc REAL)")
+        db.execute(
+            "CREATE TABLE debug_snapshots(id INTEGER PRIMARY KEY,snapshot_id TEXT,timestamp_utc TEXT)"
+        )
         support = self.start - 168 * 3600
         for timestamp in range(int(support), int(self.end), 60):
             db.execute(
@@ -50,6 +53,41 @@ class EthResearchIntervalExporterTest(unittest.TestCase):
             db.execute("INSERT INTO snapshots VALUES(?,?)", (str(timestamp), timestamp))
         db.commit()
         db.close()
+
+    def test_parent_closure_keeps_snapshot_referenced_by_windowed_child(self):
+        parent_id = "snapshot-before-support"
+        db = sqlite3.connect(self.data / "mos_research.db")
+        db.execute("INSERT INTO snapshots VALUES(?,?)", (parent_id, self.start - 1))
+        db.execute(
+            "INSERT INTO debug_snapshots(snapshot_id,timestamp_utc) VALUES(?,?)",
+            (parent_id, exporter.iso_utc(self.start + 60)),
+        )
+        db.commit()
+        db.close()
+
+        archive, manifest = export_interval(
+            self.start,
+            end=self.end,
+            data_dir=self.data,
+            output_dir=self.output,
+            project_root=Path(__file__).resolve().parents[1],
+        )
+        self.assertEqual(manifest["quality_summary"]["relational_orphans"], {})
+        extracted = self.root / "parent_closure"
+        with zipfile.ZipFile(archive) as package:
+            package.extractall(extracted)
+        db = sqlite3.connect(extracted / "mos_research.db")
+        try:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM snapshots WHERE snapshot_id=?", (parent_id,)).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM debug_snapshots WHERE snapshot_id=?", (parent_id,)).fetchone()[0],
+                1,
+            )
+        finally:
+            db.close()
 
     def _history(self):
         db = sqlite3.connect(self.data / "history.db")

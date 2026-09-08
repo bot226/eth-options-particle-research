@@ -128,16 +128,13 @@ EXTRA_PARENT_RELATIONS = {
     ],
 }
 
-# These parent/child rows carry the same source snapshot clock and both sides
-# are independently selected by the identical support window. Re-running
-# closure by the unindexed snapshots.snapshot_id would scan multi-gigabyte raw
-# payload rows without adding a parent row.
-TIME_COINCIDENT_RELATIONS = {
-    "mos_research.db": {
-        ("debug_snapshots", "snapshot_id", "snapshots", "snapshot_id"),
-        ("future_labels", "snapshot_id", "snapshots", "snapshot_id"),
-    },
-}
+# Do not skip any declared parent relation during closure.  A child row can be
+# inside the requested clock window while its source snapshot/parent is just
+# outside the window (or has a different availability clock).  Skipping the
+# closure for these apparently time-coincident tables creates a relational
+# orphan in the compact archive.  Parent closure is by indexed identity and
+# does not enlarge the event sample; it only preserves referential context.
+TIME_COINCIDENT_RELATIONS: dict[str, set[tuple[str, str, str, str]]] = {}
 
 
 class IntervalExportError(RuntimeError):

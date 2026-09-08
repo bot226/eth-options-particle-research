@@ -79,7 +79,7 @@ database archive.
 Keep the collector on one MOS version during a baseline period. Start a new
 dataset label after any change to MOS runtime logic or schema.
 
-For confirmatory ETH research after v92.3, prefer the half-open interval
+For confirmatory ETH research after v92.4, prefer the half-open interval
 exporter documented in `MOS_ETH_INTERVAL_EXPORT_AND_AUDIT_V92.md`. The baseline
 exporter remains available for complete snapshots and backward-compatible
 descriptive replay.

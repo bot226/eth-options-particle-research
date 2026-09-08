@@ -89,7 +89,7 @@ are never deleted. No registry state alone authorizes a live-entry change.
 
 ## Asset-isolated interval tooling
 
-ETH interval exporter/auditor v92.3 covers the existing ETH-H1 through ETH-H7
+ETH interval exporter/auditor v92.4 covers the existing ETH-H1 through ETH-H7
 rows without creating ETH-H8 or ETH-H12. It embeds and verifies the current ETH
 protocol hashes, reports old/new/cumulative evidence separately, and labels
 unregistered temporal horizons as diagnostic only. Infrastructure availability
