@@ -22,6 +22,7 @@ from backend.research_interval.exporter import (
     _columns,
     _canonical_protocol_sha256,
     _eth_asset_identity,
+    _relation_orphan_filter_sql,
     _readonly,
     _tables,
     iso_utc,
@@ -151,14 +152,25 @@ def _database_checks(dataset: Path) -> tuple[dict, list[str]]:
             counts = {table: int(db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]) for table in _tables(db)}
             orphans = []
             for child, child_key, parent, parent_key in EXTRA_PARENT_RELATIONS.get(path.name, []):
+                child_columns = _columns(db, child) if child in counts else set()
                 if child not in counts or parent not in counts:
                     continue
-                if child_key not in _columns(db, child) or parent_key not in _columns(db, parent):
+                if child_key not in child_columns or parent_key not in _columns(db, parent):
                     continue
+                orphan_filter = _relation_orphan_filter_sql(
+                    path.name,
+                    child,
+                    child_key,
+                    parent,
+                    parent_key,
+                    child_columns,
+                    "c",
+                )
                 count = int(db.execute(
                     f'SELECT COUNT(*) FROM "{child}" c LEFT JOIN "{parent}" p '
                     f'ON c."{child_key}"=p."{parent_key}" '
                     f'WHERE c."{child_key}" IS NOT NULL AND p."{parent_key}" IS NULL'
+                    f'{orphan_filter}'
                 ).fetchone()[0])
                 orphans.append({"relation": f"{child}.{child_key}->{parent}.{parent_key}", "count": count})
             reports[path.name] = {

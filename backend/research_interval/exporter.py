@@ -118,6 +118,7 @@ EXTRA_PARENT_RELATIONS = {
         ("events", "snapshot_id", "snapshots", "snapshot_id"),
         ("future_labels", "snapshot_id", "snapshots", "snapshot_id"),
         ("event_outcomes", "event_id", "events", "id"),
+        ("event_level_reactions", "snapshot_id", "snapshots", "snapshot_id"),
         ("event_level_reactions", "event_id", "events", "id"),
         ("event_level_reactions", "outcome_id", "event_outcomes", "id"),
     ],
@@ -135,6 +136,22 @@ EXTRA_PARENT_RELATIONS = {
 # orphan in the compact archive.  Parent closure is by indexed identity and
 # does not enlarge the event sample; it only preserves referential context.
 TIME_COINCIDENT_RELATIONS: dict[str, set[tuple[str, str, str, str]]] = {}
+
+SYNTHETIC_FALLBACK_RELATION = (
+    "mos_research.db",
+    "event_level_reactions",
+    "event_id",
+    "events",
+    "id",
+)
+SYNTHETIC_FALLBACK_COLUMNS = {
+    "event_id",
+    "snapshot_id",
+    "is_synthetic",
+    "source",
+    "event_type",
+    "outcome_id",
+}
 
 
 class IntervalExportError(RuntimeError):
@@ -208,6 +225,55 @@ def _tables(db: sqlite3.Connection) -> list[str]:
 
 def _columns(db: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in db.execute(f"PRAGMA table_info({_quote(table)})")}
+
+
+def _synthetic_fallback_predicate(
+    database_name: str,
+    child: str,
+    child_key: str,
+    parent: str,
+    parent_key: str,
+    child_columns: set[str],
+    alias: str,
+) -> str | None:
+    """Identify only the engine's internally consistent standalone fallback row."""
+
+    if (
+        (database_name, child, child_key, parent, parent_key)
+        != SYNTHETIC_FALLBACK_RELATION
+        or not SYNTHETIC_FALLBACK_COLUMNS.issubset(child_columns)
+    ):
+        return None
+    prefix = f"{alias}."
+    return (
+        f"CAST({prefix}{_quote('event_id')} AS TEXT)="
+        f"'fallback_' || CAST({prefix}{_quote('snapshot_id')} AS TEXT) "
+        f"AND COALESCE({prefix}{_quote('is_synthetic')},0)=1 "
+        f"AND {prefix}{_quote('source')}='ohlcv_only' "
+        f"AND {prefix}{_quote('event_type')}='OHLCV_PRICE_ACTION' "
+        f"AND {prefix}{_quote('outcome_id')} IS NULL"
+    )
+
+
+def _relation_orphan_filter_sql(
+    database_name: str,
+    child: str,
+    child_key: str,
+    parent: str,
+    parent_key: str,
+    child_columns: set[str],
+    alias: str,
+) -> str:
+    predicate = _synthetic_fallback_predicate(
+        database_name,
+        child,
+        child_key,
+        parent,
+        parent_key,
+        child_columns,
+        alias,
+    )
+    return f" AND NOT ({predicate})" if predicate else ""
 
 
 def _column_types(db: sqlite3.Connection, table: str) -> dict[str, str]:
@@ -574,13 +640,23 @@ def _database_summary(path: Path, database_name: str) -> dict:
         for child, child_key, parent, parent_key in EXTRA_PARENT_RELATIONS.get(
             database_name, []
         ):
+            child_columns = _columns(db, child) if child in tables else set()
             if (
                 child not in tables
                 or parent not in tables
-                or child_key not in _columns(db, child)
+                or child_key not in child_columns
                 or parent_key not in _columns(db, parent)
             ):
                 continue
+            orphan_filter = _relation_orphan_filter_sql(
+                database_name,
+                child,
+                child_key,
+                parent,
+                parent_key,
+                child_columns,
+                "child",
+            )
             orphan_count = int(
                 db.execute(
                     f"SELECT COUNT(*) FROM {_quote(child)} child "
@@ -588,6 +664,7 @@ def _database_summary(path: Path, database_name: str) -> dict:
                     f"ON child.{_quote(child_key)}=parent.{_quote(parent_key)} "
                     f"WHERE child.{_quote(child_key)} IS NOT NULL "
                     f"AND parent.{_quote(parent_key)} IS NULL"
+                    f"{orphan_filter}"
                 ).fetchone()[0]
             )
             orphan_checks.append(

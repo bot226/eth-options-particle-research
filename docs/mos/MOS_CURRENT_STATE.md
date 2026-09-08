@@ -10,18 +10,18 @@ project-local databases. No BTC database was migrated.
 ```python
 CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v92.5_eth_interval_parent_index"
+ENGINE_PATCH_VERSION = "v92.6_eth_synthetic_fallback_lineage"
 DATASET_EXPORTER_VERSION = "1.2.2"
-INTERVAL_EXPORTER_VERSION = "92.5-eth.1"
+INTERVAL_EXPORTER_VERSION = "92.6-eth.1"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
 The analytical formulas and thresholds are inherited unchanged. They have not
 yet been validated on ETH and must not be treated as proven ETH trading logic.
 
-## ETH interval export and audit v92.5
+## ETH interval export and audit v92.6
 
-Patch `v92.5_eth_interval_parent_index` adds a research-only, half-open
+Patch `v92.6_eth_synthetic_fallback_lineage` adds a research-only, half-open
 ETH interval exporter and full archive-audit command. The exporter embeds only
 the two active ETH frozen protocols, uses the latest fully closed `ETHUSDT`
 minute as its upper boundary, keeps seven days of support separate, and records
@@ -34,6 +34,11 @@ Parent closure now preserves every declared source identity, including parents
 just outside the time window referenced by an in-window child.
 The exporter builds one temporary index per unindexed referenced parent key so
 this integrity closure does not repeatedly scan large raw tables.
+Synthetic OHLCV fallback reactions are intentionally standalone from
+`events.id`. They pass only when `event_id` exactly equals
+`fallback_<snapshot_id>`, all engine fallback markers agree, and the referenced
+source snapshot exists. Ordinary event reactions and malformed fallback rows
+remain fail-closed relational errors.
 
 The audit produces JSON and Markdown, reports old/new/cumulative accounting,
 profiles all registered ETH-H1 through ETH-H7 horizons plus clearly labelled

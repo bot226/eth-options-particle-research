@@ -43,7 +43,7 @@ Do not promote inherited thresholds as ETH evidence. Collect a clean ETH-only
 archive and perform separate walk-forward validation before any scoring or
 execution change.
 
-## Next collection task after v92.5 tooling
+## Next collection task after v92.6 tooling
 
 1. Keep the existing ETH collector and databases running unchanged.
 2. Export the next untouched interval with `export_research_interval.bat`,

@@ -89,6 +89,127 @@ class EthResearchIntervalExporterTest(unittest.TestCase):
         finally:
             db.close()
 
+    def _add_reaction_schema(self):
+        db = sqlite3.connect(self.data / "mos_research.db")
+        db.execute("CREATE TABLE events(id INTEGER PRIMARY KEY,snapshot_id TEXT,timestamp_utc REAL)")
+        db.execute(
+            "CREATE TABLE event_level_reactions("
+            "id INTEGER PRIMARY KEY,event_id TEXT,outcome_id INTEGER,snapshot_id TEXT,"
+            "event_type TEXT,event_timestamp_utc TEXT,source TEXT,is_synthetic INTEGER)"
+        )
+        db.commit()
+        db.close()
+
+    def test_valid_ohlcv_fallback_has_snapshot_lineage_without_event_parent(self):
+        self._add_reaction_schema()
+        snapshot_id = "synthetic-source-snapshot"
+        db = sqlite3.connect(self.data / "mos_research.db")
+        db.execute("INSERT INTO snapshots VALUES(?,?)", (snapshot_id, self.start - 1))
+        db.execute(
+            "INSERT INTO event_level_reactions VALUES(1,?,?,?,?,?,?,?)",
+            (
+                f"fallback_{snapshot_id}",
+                None,
+                snapshot_id,
+                "OHLCV_PRICE_ACTION",
+                exporter.iso_utc(self.start + 60),
+                "ohlcv_only",
+                1,
+            ),
+        )
+        db.commit()
+        db.close()
+
+        archive, manifest = export_interval(
+            self.start,
+            end=self.end,
+            data_dir=self.data,
+            output_dir=self.output,
+            project_root=Path(__file__).resolve().parents[1],
+        )
+        self.assertEqual(manifest["quality_summary"]["relational_orphans"], {})
+        extracted = self.root / "valid_fallback"
+        with zipfile.ZipFile(archive) as package:
+            package.extractall(extracted)
+        db = sqlite3.connect(extracted / "mos_research.db")
+        try:
+            self.assertEqual(
+                db.execute(
+                    "SELECT COUNT(*) FROM event_level_reactions WHERE event_id=?",
+                    (f"fallback_{snapshot_id}",),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                db.execute(
+                    "SELECT COUNT(*) FROM snapshots WHERE snapshot_id=?", (snapshot_id,)
+                ).fetchone()[0],
+                1,
+            )
+        finally:
+            db.close()
+
+    def test_malformed_fallback_identifier_still_fails_closed(self):
+        self._add_reaction_schema()
+        snapshot_id = "synthetic-source-snapshot"
+        db = sqlite3.connect(self.data / "mos_research.db")
+        db.execute("INSERT INTO snapshots VALUES(?,?)", (snapshot_id, self.start))
+        db.execute(
+            "INSERT INTO event_level_reactions VALUES(1,?,?,?,?,?,?,?)",
+            (
+                "fallback_wrong-snapshot",
+                None,
+                snapshot_id,
+                "OHLCV_PRICE_ACTION",
+                exporter.iso_utc(self.start + 60),
+                "ohlcv_only",
+                1,
+            ),
+        )
+        db.commit()
+        db.close()
+
+        with self.assertRaisesRegex(
+            IntervalExportError, "archive_quality_gate_failed:relational_orphans_detected"
+        ):
+            export_interval(
+                self.start,
+                end=self.end,
+                data_dir=self.data,
+                output_dir=self.output,
+                project_root=Path(__file__).resolve().parents[1],
+            )
+
+    def test_fallback_without_source_snapshot_still_fails_closed(self):
+        self._add_reaction_schema()
+        snapshot_id = "missing-source-snapshot"
+        db = sqlite3.connect(self.data / "mos_research.db")
+        db.execute(
+            "INSERT INTO event_level_reactions VALUES(1,?,?,?,?,?,?,?)",
+            (
+                f"fallback_{snapshot_id}",
+                None,
+                snapshot_id,
+                "OHLCV_PRICE_ACTION",
+                exporter.iso_utc(self.start + 60),
+                "ohlcv_only",
+                1,
+            ),
+        )
+        db.commit()
+        db.close()
+
+        with self.assertRaisesRegex(
+            IntervalExportError, "archive_quality_gate_failed:relational_orphans_detected"
+        ):
+            export_interval(
+                self.start,
+                end=self.end,
+                data_dir=self.data,
+                output_dir=self.output,
+                project_root=Path(__file__).resolve().parents[1],
+            )
+
     def _history(self):
         db = sqlite3.connect(self.data / "history.db")
         db.execute("PRAGMA foreign_keys=ON")

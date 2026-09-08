@@ -1,4 +1,4 @@
-# ETH MOS interval export and audit v92.5
+# ETH MOS interval export and audit v92.6
 
 Status: research-only infrastructure
 
@@ -50,6 +50,12 @@ endings. The raw file hash is retained in the manifest and audit report for
 forensics. The exporter refuses a ZIP on a missing database or protocol, hash mismatch,
 mixed asset, missing/duplicate `ETHUSDT` minute, current-minute leakage,
 SQLite failure, foreign-key failure, or declared relational orphan.
+The engine's synthetic OHLCV fallback reactions do not have an `events.id`
+parent by design. They are accepted only when their identifier is exactly
+`fallback_<snapshot_id>`, their synthetic/source/type markers match the engine
+contract, `outcome_id` is null, and the referenced source snapshot is present.
+All normal reactions still require an event parent; malformed fallback rows
+still fail the archive gate.
 
 ## Full archive audit
 
