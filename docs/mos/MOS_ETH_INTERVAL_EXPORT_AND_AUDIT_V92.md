@@ -1,4 +1,4 @@
-# ETH MOS interval export and audit v92.2
+# ETH MOS interval export and audit v92.3
 
 Status: research-only infrastructure
 
@@ -40,11 +40,14 @@ mandatory.
 Required immutable ETH protocols:
 
 - `MOS_OPTION_FLOW_PREREG_V1.json`, SHA-256
-  `57B0D1FA0D988F5BCCEE5B674E8A8461E1667D36D7DFA7204FEA5A7D5D723217`;
+  `520F37347E945E39998B6EDDEB72BDC5AFFBC8D20A65D8578B02517D8E68747E`;
 - `MOS_TREND_BEFORE_COMPRESSION_PREREG_V1.json`, SHA-256
   `E184B0C6FAD1E7849C9C2EA94A0882C479E9007BF61CD3ED1D52DEF9B23C906A`.
 
-The exporter refuses a ZIP on a missing database or protocol, hash mismatch,
+The hashes are calculated after UTF-8 BOM removal and CRLF/CR to LF
+normalization, so a Windows checkout cannot fail solely because of line
+endings. The raw file hash is retained in the manifest and audit report for
+forensics. The exporter refuses a ZIP on a missing database or protocol, hash mismatch,
 mixed asset, missing/duplicate `ETHUSDT` minute, current-minute leakage,
 SQLite failure, foreign-key failure, or declared relational orphan.
 

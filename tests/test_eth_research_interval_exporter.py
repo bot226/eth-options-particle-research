@@ -119,6 +119,23 @@ class EthResearchIntervalExporterTest(unittest.TestCase):
             with self.assertRaisesRegex(IntervalExportError, "frozen_protocol_sha256_mismatch"):
                 export_interval(self.start, end=self.end, data_dir=self.data, output_dir=self.output)
 
+    def test_protocol_hash_is_independent_of_windows_line_endings(self):
+        raw = b'{"protocol_id":"TEST"}\r\n'
+        lf = b'{"protocol_id":"TEST"}\n'
+        self.assertEqual(
+            exporter._canonical_protocol_sha256(raw),
+            exporter._canonical_protocol_sha256(lf),
+        )
+        self.assertNotEqual(hashlib.sha256(raw).hexdigest(), hashlib.sha256(lf).hexdigest())
+
+    def test_protocol_manifest_retains_raw_and_canonical_digests(self):
+        path = self.root / "protocol.json"
+        path.write_bytes(b'{"protocol_id":"TEST"}\r\n')
+        manifest = exporter._protocol_manifest([path])[path.name]
+        self.assertEqual(manifest["sha256"], manifest["canonical_sha256"])
+        self.assertNotEqual(manifest["raw_sha256"], manifest["canonical_sha256"])
+        self.assertTrue(manifest["line_endings_normalized"])
+
     def test_refuses_mixed_asset_rows(self):
         db = sqlite3.connect(self.data / "option_trade_flow.db")
         db.execute(

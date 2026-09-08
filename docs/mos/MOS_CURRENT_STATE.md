@@ -10,24 +10,26 @@ project-local databases. No BTC database was migrated.
 ```python
 CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v92_eth_interval_audit_infrastructure"
+ENGINE_PATCH_VERSION = "v92.3_eth_interval_protocol_portability"
 DATASET_EXPORTER_VERSION = "1.2.2"
-INTERVAL_EXPORTER_VERSION = "92.2-eth.1"
+INTERVAL_EXPORTER_VERSION = "92.3-eth.1"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
 The analytical formulas and thresholds are inherited unchanged. They have not
 yet been validated on ETH and must not be treated as proven ETH trading logic.
 
-## ETH interval export and audit v92.2
+## ETH interval export and audit v92.3
 
-Patch `v92_eth_interval_audit_infrastructure` adds a research-only, half-open
+Patch `v92.3_eth_interval_protocol_portability` adds a research-only, half-open
 ETH interval exporter and full archive-audit command. The exporter embeds only
 the two active ETH frozen protocols, uses the latest fully closed `ETHUSDT`
 minute as its upper boundary, keeps seven days of support separate, and records
 the 720-minute carryover/maturity boundary. It requires the four ETH project
 databases and rejects mixed BTC/SOL identity, missing price minutes, integrity
-failures, relational orphans, or protocol hash drift.
+failures, relational orphans, or protocol hash drift. Frozen protocol hashes
+are canonicalized to LF, so Windows line endings cannot create a false drift;
+raw hashes remain in the manifest for forensics.
 
 The audit produces JSON and Markdown, reports old/new/cumulative accounting,
 profiles all registered ETH-H1 through ETH-H7 horizons plus clearly labelled

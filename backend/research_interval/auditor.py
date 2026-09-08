@@ -20,6 +20,7 @@ from backend.research_interval.exporter import (
     EXTRA_PARENT_RELATIONS,
     REQUIRED_DATABASES,
     _columns,
+    _canonical_protocol_sha256,
     _eth_asset_identity,
     _readonly,
     _tables,
@@ -185,9 +186,19 @@ def _protocol_checks(dataset: Path) -> tuple[dict, list[str]]:
         if path is None:
             errors.append(f"required_protocol_missing:{name}")
             continue
-        actual = _sha256(path)
+        # Frozen protocol identity is newline-independent.  The raw digest is
+        # retained for forensics, while the canonical digest is the gate.
+        actual = _canonical_protocol_sha256(path.read_bytes())
+        raw = _sha256(path)
         source = "archive" if dataset in path.parents else "project"
-        reports[name] = {"sha256": actual, "expected_sha256": expected, "source": source, "match": actual == expected}
+        reports[name] = {
+            "sha256": actual,
+            "canonical_sha256": actual,
+            "raw_sha256": raw,
+            "expected_sha256": expected,
+            "source": source,
+            "match": actual == expected,
+        }
         if actual != expected:
             errors.append(f"required_protocol_hash_mismatch:{name}")
     return reports, errors

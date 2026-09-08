@@ -38,7 +38,10 @@ REQUIRED_PROTOCOLS = (
     "MOS_TREND_BEFORE_COMPRESSION_PREREG_V1.json",
 )
 EXPECTED_PROTOCOL_SHA256 = {
-    "MOS_OPTION_FLOW_PREREG_V1.json": "57B0D1FA0D988F5BCCEE5B674E8A8461E1667D36D7DFA7204FEA5A7D5D723217",
+    # Hashes are over canonical UTF-8 JSON bytes with platform line endings
+    # normalized to LF.  This keeps the frozen gate portable while still
+    # failing closed on any semantic/content change.
+    "MOS_OPTION_FLOW_PREREG_V1.json": "520F37347E945E39998B6EDDEB72BDC5AFFBC8D20A65D8578B02517D8E68747E",
     "MOS_TREND_BEFORE_COMPRESSION_PREREG_V1.json": "E184B0C6FAD1E7849C9C2EA94A0882C479E9007BF61CD3ED1D52DEF9B23C906A",
 }
 
@@ -458,13 +461,29 @@ def _protocol_files() -> list[Path]:
     return sorted(PROTOCOL_DIR.glob("MOS_*.json"))
 
 
+def _canonical_protocol_bytes(raw: bytes) -> bytes:
+    """Return protocol bytes independent of Windows/Linux line endings."""
+
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    return raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def _canonical_protocol_sha256(raw: bytes) -> str:
+    return hashlib.sha256(_canonical_protocol_bytes(raw)).hexdigest().upper()
+
+
 def _protocol_manifest(protocols: list[Path] | None = None) -> dict[str, dict]:
     result = {}
     for path in protocols if protocols is not None else _protocol_files():
         raw = path.read_bytes()
         payload = json.loads(raw.decode("utf-8-sig"))
+        canonical = _canonical_protocol_bytes(raw)
         result[path.name] = {
-            "sha256": hashlib.sha256(raw).hexdigest().upper(),
+            "sha256": hashlib.sha256(canonical).hexdigest().upper(),
+            "canonical_sha256": hashlib.sha256(canonical).hexdigest().upper(),
+            "raw_sha256": hashlib.sha256(raw).hexdigest().upper(),
+            "line_endings_normalized": raw != canonical,
             "protocol_id": payload.get("protocol_id") or payload.get("protocol"),
             "hypothesis_id": payload.get("hypothesis_id"),
             "eligible_data_start_utc": payload.get("eligible_data_start_utc")
