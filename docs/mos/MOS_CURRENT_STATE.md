@@ -10,13 +10,32 @@ project-local databases. No BTC database was migrated.
 ```python
 CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v74_deribit_call_put_diagnostic_value"
+ENGINE_PATCH_VERSION = "v92_eth_interval_audit_infrastructure"
 DATASET_EXPORTER_VERSION = "1.2.2"
+INTERVAL_EXPORTER_VERSION = "92.2-eth.1"
 PARTICLE_LOGIC_VERSION = "particle_shadow_v3"
 ```
 
 The analytical formulas and thresholds are inherited unchanged. They have not
 yet been validated on ETH and must not be treated as proven ETH trading logic.
+
+## ETH interval export and audit v92.2
+
+Patch `v92_eth_interval_audit_infrastructure` adds a research-only, half-open
+ETH interval exporter and full archive-audit command. The exporter embeds only
+the two active ETH frozen protocols, uses the latest fully closed `ETHUSDT`
+minute as its upper boundary, keeps seven days of support separate, and records
+the 720-minute carryover/maturity boundary. It requires the four ETH project
+databases and rejects mixed BTC/SOL identity, missing price minutes, integrity
+failures, relational orphans, or protocol hash drift.
+
+The audit produces JSON and Markdown, reports old/new/cumulative accounting,
+profiles all registered ETH-H1 through ETH-H7 horizons plus clearly labelled
+diagnostic horizons, and replays H7 lineage from mandatory ETH history/MOS
+sources when an optional historical particle DB is absent. Exact parity is
+required whenever both lineage sources overlap. No BTC H8/H12 observer,
+threshold, cutoff, result, or sample was transferred. Live behavior and all
+existing databases remain unchanged.
 
 ## ETH stable surface v71 and expiry normalizer v72
 

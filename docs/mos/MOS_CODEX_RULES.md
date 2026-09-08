@@ -99,7 +99,7 @@ Current development branch:
 ```python
 CODE_VERSION = "eth_fork_2026_08_14_v1_from_btc_v70"
 RESEARCH_SCHEMA_VERSION = "2.0"
-ENGINE_PATCH_VERSION = "v74_deribit_call_put_diagnostic_value"
+ENGINE_PATCH_VERSION = "v92_eth_interval_audit_infrastructure"
 ```
 
 Do not create duplicate version files.

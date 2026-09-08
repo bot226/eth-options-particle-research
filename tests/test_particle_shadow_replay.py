@@ -9,6 +9,7 @@ from backend.engine.history_db import HistoryDB
 from research.particle_shadow.common import parse_contract
 from research.particle_shadow.extractor import ExtractionConfig
 from research.particle_shadow.replay import ParticleReplayError, run_replay
+from backend.research_interval.auditor import _particle_lineage
 
 
 def file_hash(path):
@@ -371,6 +372,19 @@ class ParticleShadowReplayTest(unittest.TestCase):
             )
         finally:
             connection.close()
+
+    def test_h7_fallback_replay_has_exact_overlap_parity_and_is_read_only(self):
+        archived = self.dataset / "particle_shadow_v3.db"
+        history_before = file_hash(self.history_db)
+        research_before = file_hash(self.research_db)
+        run_replay(self.dataset, archived)
+        scratch = self.root / "fallback"
+        scratch.mkdir()
+        _, lineage = _particle_lineage(self.dataset, scratch)
+        self.assertEqual(lineage["parity"]["status"], "pass")
+        self.assertEqual(lineage["parity"]["mismatches"], 0)
+        self.assertEqual(file_hash(self.history_db), history_before)
+        self.assertEqual(file_hash(self.research_db), research_before)
 
 
 class HistoryContractSnapshotTest(unittest.TestCase):

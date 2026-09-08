@@ -42,3 +42,18 @@ Layer isolation, and read-only option-flow observer design.
 Do not promote inherited thresholds as ETH evidence. Collect a clean ETH-only
 archive and perform separate walk-forward validation before any scoring or
 execution change.
+
+## Next collection task after v92.2 tooling
+
+1. Keep the existing ETH collector and databases running unchanged.
+2. Export the next untouched interval with `export_research_interval.bat`,
+   choosing the first UTC instant not already counted as new ETH evidence.
+3. Audit it with `audit_eth_mos_archive.bat` and pass every earlier ETH interval
+   with `--previous` when using the command directly.
+4. Do not promote or retune ETH-H1 through ETH-H7 unless the corresponding
+   frozen day/event/quality gates pass.
+
+Legacy baseline ZIPs lacking embedded frozen protocols and explicit
+analysis/support/carryover boundaries must be re-exported from the live ETH
+databases if those time rows are still retained. They remain descriptive
+artifacts, not interval-confirmation packages.
